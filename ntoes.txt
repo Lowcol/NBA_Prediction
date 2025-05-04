@@ -1,0 +1,67 @@
+Great! Let's break down what your correlation plots reveal:
+
+---
+
+### 📊 **Bar Plot: Top 20 Features Most Correlated with Team1Win**
+
+This shows how strongly each stat is associated with a **Team1 victory**.
+
+#### 🔹 **Most Positively Correlated Features**:
+| Feature            | Meaning |
+|--------------------|---------|
+| `Team1Score`       | Obvious — the more points Team1 scores, the more likely they win ✅  
+| `Team1_W_PCT`      | Win % of Team1 — stronger teams win more ✅  
+| `Team1_PLUS_MINUS` | Net point differential — strong indicator of in-game dominance ✅  
+| `Team1_W`          | Raw win count (correlated to strength) ✅  
+| `Team2_W_RANK`, `Team2_L_RANK` | How strong the opponent is (inverse) ❌  
+| `Team2_DREB_RANK`  | Defensive rebounding ranking of opponent — lower values may indicate weak rebounding ❌  
+
+So:  
+✔️ Stats like **FG%**, **TS%**, **EFG%**, **PLUS/MINUS**, and **W_PCT** are predictive of winning.  
+❌ Opponent rankings (Team2’s rank-based stats) inversely correlate with winning.
+
+---
+
+### 🔥 Takeaway #1:
+> ✅ **Use** shooting efficiency stats, point differential, and win %  
+> ❌ Avoid raw rank columns unless modeling relative strength
+
+---
+
+### 🧊 **Heatmap: Full Correlation Matrix**
+
+This helps us identify:
+1. **Multicollinearity** (stats that move together)
+2. **Redundant features**
+
+#### 🔥 Notable Observations:
+- **Heavy red blocks** = lots of highly correlated features (especially `FGM`, `FG_PCT`, `TS%`, `EFG%`, `PTS`)  
+  → pick **one from each group** to avoid redundancy
+- `Team1Score` and `Team1PTS`, `Team1FGM`, etc. are all tightly linked  
+  → no need to include all of them
+
+---
+
+### 🔥 Takeaway #2:
+> ✅ Reduce dimensionality: keep 1–2 stats per category (scoring, rebounding, shooting %, etc.)  
+> This helps prevent overfitting and improves interpretability.
+
+---
+
+### 🧠 Suggested Features for Modeling:
+Pick a **balanced, compact subset** like this:
+
+- `Team1_W_PCT`, `Team1_PLUS_MINUS`, `Team1_EFG_PCT`, `Team1_TOV_PCT`, `Team1_AST_RATIO`, `Team1_PACE`
+- Same stats for `Team2_`
+
+Avoid: `Team1Score`, `Team1Win`, and `*_RANK` columns when training (as they are either the label or leakage).
+
+---
+
+### ✅ Next Steps?
+Would you like me to:
+1. **Generate a cleaned feature set** (best 10–20 stats total)?
+2. **Train a model** on those features?
+3. Help you use this pipeline across multiple seasons?
+
+Let me know what direction you'd like next!
