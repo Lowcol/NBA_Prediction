@@ -65,3 +65,9 @@ Would you like me to:
 3. Help you use this pipeline across multiple seasons?
 
 Let me know what direction you'd like next!
+
+
+
+------
+data model is not trained well team 2 always win the prediction
+back to training

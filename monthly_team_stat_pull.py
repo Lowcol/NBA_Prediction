@@ -2,7 +2,7 @@ from nba_api.stats.endpoints import LeagueDashTeamStats
 import pandas as pd
 import time
 
-season = '2019-20'
+season = '2024-25'  # Change this to the desired season
 
 all_months = []
 
