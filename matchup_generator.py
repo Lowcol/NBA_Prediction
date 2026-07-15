@@ -8,10 +8,10 @@ columns_to_drop = [col for col in merged.columns if "Unnamed" in col or "Arena" 
 columns_to_drop += ['Team', 'Overall', 'Home', 'Road', 'E', 'W_y', 'A', 'C', 'SE', 'NW', 'P', 'SW', 'Pre', 'Post']
 merged = merged.drop(columns=columns_to_drop)
 
-# 🧹 Keep only numeric columns!
+# Keep only numeric columns
 merged = merged.select_dtypes(include=[float, int])
 
-# 🧠 Now define ALL remaining columns automatically
+# Now define all remaining columns automatically
 all_features = merged.columns.tolist()
 
 select_features = [
