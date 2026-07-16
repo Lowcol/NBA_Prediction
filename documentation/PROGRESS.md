@@ -55,12 +55,13 @@ User asked me to explain why `requirements-dev.txt` and `conftest.py` were neces
 
 ## Phase 2 — MLflow tracking + registry (`ARCHITECTURE.md`)
 
-**Status: in progress.** Roadmap item 2 is "Introduce MLflow (training logs
-runs) and DVC (data snapshots), and point the batch job at the registry's
-Production model instead of a local pickle." Broke into: (a) MLflow training
-instrumentation + registry — **done**; (b) DVC data snapshots — **done, on
-an AWS S3 remote (pending the user adding CI secrets + a commit)**;
-(c) repoint the batch job at the registry — **done**.
+**Status: done.** Merged/verified via PR `phase2-mlflow-dvc` — all CI checks
+green, including a from-scratch `dvc pull` from S3 in the `test` job (the real
+proof a fresh machine can restore the data). Roadmap item 2 was "Introduce
+MLflow (training logs runs) and DVC (data snapshots), and point the batch job
+at the registry's Production model instead of a local pickle." All three
+sub-tasks done: (a) MLflow training instrumentation + registry; (b) DVC data
+snapshots on an AWS S3 remote; (c) batch job repointed at the registry.
 
 ### Decisions locked (user chose Pipeline; the other two are recommended defaults, easily reversible)
 - **Model + scaler packaged as one `sklearn.Pipeline`** (user's call).
@@ -171,13 +172,11 @@ an AWS S3 remote (pending the user adding CI secrets + a commit)**;
   reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` from GitHub Actions
   secrets. The `docker-build` job is untouched (it doesn't need data).
 
-### Still needed to close sub-task (b)
-- **User action:** add the two GitHub repo secrets `AWS_ACCESS_KEY_ID` and
-  `AWS_SECRET_ACCESS_KEY` (Settings → Secrets and variables → Actions). Until
-  then the CI `dvc pull` step will fail.
-- **Not yet proven:** a true fresh-machine `dvc pull` *from S3* (local runs
-  hit the cache). Push succeeded + remote is in sync, so the data is there;
-  the first CI run after the secrets are added is the real end-to-end test.
+### Closed out
+- GitHub repo secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` added.
+- CI on the `phase2-mlflow-dvc` PR went green — the `test` job's `dvc pull`
+  from S3 succeeded on a clean runner, proving the fresh-machine restore path.
+  This was the outstanding end-to-end proof; Phase 2 is fully verified.
 - `test_model_artifacts.py` left as-is: it still asserts the local
   `best_model.pkl`/`scaler.pkl` exist + scaler shape, which now doubles as a
   guard on the batch job's fallback artifacts. No registry-loading test was
