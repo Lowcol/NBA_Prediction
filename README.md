@@ -8,15 +8,24 @@ A machine learning pipeline that predicts the winner of upcoming NBA games from 
 scripts/
   data_pull/     # Hits the NBA stats API (via nba_api) and writes raw CSVs into NBAdata/
   data_prep/     # Merges/reshapes raw pulls into the monthly team-stat tables used for training
-  modeling/      # Trains and evaluates the prediction model
+  modeling/      # Trains and evaluates the prediction model; features.py is the shared feature contract
+
+serving/
+  batch/         # Nightly batch job: predicts an upcoming slate of games
+
+docker/
+  Dockerfile.batch  # Containerizes the batch job
 
 NBAdata/
   matchups/                        # One row per game, per season (2019-20 .. 2024-25)
   monthly_stats/                   # Current-season (2024-25) base/advanced/combined team stats by month
   archive/historical/monthly_stats/# Same, for past seasons (2019-20 .. 2023-24)
+  predictions/                     # Batch job output, one CSV per predicted slate date
   NBA_Training_Matchups_2019_2025.csv  # Combined training set built by decision_tree_training.py
   best_model.pkl, scaler.pkl       # Latest trained model + the StandardScaler used with it
 ```
+
+See `ARCHITECTURE.md` for the plan behind productionizing this: batch first, then a real-time API, versioning, monitoring, and reliability patterns.
 
 ## Pipeline
 
@@ -48,6 +57,23 @@ python scripts/data_pull/nbaPull_19-25_matchups.py   # only needed to refresh ma
 python scripts/modeling/decision_tree_training.py    # builds the training set, trains, saves best_model.pkl
 ```
 
+## Serving
+
+4. **Batch predictions** (`serving/batch/`)
+
+- `run_nightly_predictions.py` — predicts an upcoming slate of games. Fetches that day's schedule via `nba_api`'s `ScheduleLeagueV2` (home/away comes directly from the schedule, no `MATCHUP`-string parsing needed), looks up each team's most recent monthly stats using the same feature contract as training (`scripts/modeling/features.py`), and writes `NBAdata/predictions/predictions_<date>.csv` with a predicted winner and win probability per game.
+- Run locally:
+  ```
+  python serving/batch/run_nightly_predictions.py                  # predicts tomorrow's slate
+  python serving/batch/run_nightly_predictions.py --date 2025-04-01 # predicts a specific date (also useful for testing against a past date)
+  ```
+- Run via Docker (`docker/Dockerfile.batch`) — the image holds the code only; `NBAdata/` (model, scaler, stats) is mounted at runtime so the container always reads/writes the current data on disk:
+  ```
+  docker build -f docker/Dockerfile.batch -t nba-batch:latest .
+  docker run --rm -v "$(pwd)/NBAdata:/app/NBAdata" nba-batch:latest --date 2025-04-01
+  ```
+  (On Windows Git Bash, prefix with `MSYS_NO_PATHCONV=1` — otherwise Git Bash rewrites the container-side `/app/...` path.)
+
 ## Known issues
 
 ### Data leakage (fixed, 2026-07-15)
@@ -57,3 +83,7 @@ The original `nbaPull_19-25_matchups.py` pulled `PTS` and `PLUS_MINUS` from the 
 ### Residual, smaller leakage (open)
 
 Team stats are joined to each matchup at **month granularity** (`merge_advanced_base_stats.py` / the merge logic in `decision_tree_training.py`): a game played in November is joined to November's aggregate stats, which include that same game's contribution to the month's totals. This is much less severe than the original bug (the aggregate is diluted across ~15 games instead of being the game's own score) but is not fully pregame-safe. Fixing this properly would mean rebuilding team stats as trailing rolling averages computed strictly from games before each matchup's date, which is a bigger change than the minimal fix applied so far.
+
+### Monthly stats mislabeled by season (fixed, 2026-07-16)
+
+`merge_advanced_base_stats.py` hardcoded `season = "2019-20"` when building its output, regardless of which season's base/advanced files it was actually merging. Every `nba_team_combined_stats_*.csv` file — current and archived, all 6 seasons — ended up with its internal `Season` column stuck at `"2019-20"`. Since `decision_tree_training.py` joins matchups to stats on `["Team", "Season", "Month"]`, only the true 2019-20 matchups ever found a match; the other 5 seasons' rows were silently dropped by `dropna`, meaning the model was training on ~976 rows instead of the ~7,600 the pipeline was supposed to produce. The script now derives `season` from the loaded data itself and regenerates every season's combined-stats file; all 6 seasons now correctly contribute rows.

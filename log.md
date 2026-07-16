@@ -2,6 +2,15 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-07-16 — Fixed monthly-stats season mislabeling, retrained, started MLOps roadmap
+
+**State: training pipeline now actually uses all 6 seasons; started productionizing per `ARCHITECTURE.md`.**
+
+- While scoping the first build phase (batch prediction job, per `ARCHITECTURE.md`), found that `merge_advanced_base_stats.py` hardcoded `season = "2019-20"` regardless of which season it was merging — every combined monthly-stats file, including the other 5 seasons' archived files, had its `Season` column stuck at `"2019-20"`. Since training joins matchups to stats on `["Team", "Season", "Month"]`, only 2019-20 matchups ever matched; the other 5 seasons were silently dropped by `dropna` on every training run since this bug was introduced. The model was effectively trained on ~976 rows, not ~7,600.
+- Fixed: `season` is now read from the loaded data instead of hardcoded, and the script regenerates every season's file. No re-pull from the NBA API was needed — the raw per-season base/advanced stat files were already correct, only the merge step was buggy.
+- Retrained on the corrected dataset (7,595 rows across all 6 seasons). New best model: **Bagging SVC**, ~60.7% CV accuracy, ~61.1% held-out test accuracy, vs. a ~55.4% home-court-only baseline. Comparable to the previous (bugged) result, but now genuinely trained on the full multi-season dataset instead of one season.
+- Added `ARCHITECTURE.md`: a plan for productionizing the model (Docker, batch + real-time serving, MLflow/DVC versioning, monitoring, circuit breaker, shadow deployment, load testing). Batch prediction is the priority; the on-demand real-time API is deferred to a later phase.
+
 ## 2026-07-15 — Leakage fix, home-court feature, repo cleanup
 
 **State: working end to end, results are believable but not yet strong.**

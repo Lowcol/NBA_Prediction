@@ -12,6 +12,7 @@ from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 
+from features import SELECTED_FEATURES, resolve_stat_columns
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = PROJECT_ROOT / "NBAdata"
@@ -96,24 +97,7 @@ def build_training_frame(matchup_path: Path, monthly_path: Path, season_key: str
     stats_df["Month"] = pd.to_numeric(stats_df["Month"], errors="coerce")
     stats_df["Season"] = stats_df["Season"].astype(str)
 
-    stat_map: dict[str, list[str]] = {
-        "W_PCT": ["W_PCT_base", "W_PCT"],
-        "PIE": ["PIE"],
-        "eFG%": ["EFG_PCT"],
-        "TOV%": ["TM_TOV_PCT"],
-        "ORB%": ["OREB_PCT"],
-        "FTR": ["FT_PCT"],
-    }
-
-    selected_cols = ["TEAM_NAME", "Season", "Month"]
-    resolved_map: dict[str, str] = {}
-    for model_col, options in stat_map.items():
-        source = next((col for col in options if col in stats_df.columns), None)
-        if source is not None:
-            resolved_map[model_col] = source
-            selected_cols.append(source)
-
-    selected_cols = list(dict.fromkeys(selected_cols))
+    resolved_map, selected_cols = resolve_stat_columns(stats_df.columns)
 
     team1_rename = {"TEAM_NAME": "Team1"}
     team2_rename = {"TEAM_NAME": "Team2"}
@@ -159,22 +143,7 @@ def build_historical_training_dataset() -> pd.DataFrame:
 def main() -> None:
     df = build_historical_training_dataset()
     target = "Team1Win"
-
-    selected_features = [
-        "Team1_W_PCT",
-        "Team2_W_PCT",
-        "Team1Home",
-        "Team1_PIE",
-        "Team1_eFG%",
-        "Team1_TOV%",
-        "Team1_ORB%",
-        "Team1_FTR",
-        "Team2_PIE",
-        "Team2_eFG%",
-        "Team2_TOV%",
-        "Team2_ORB%",
-        "Team2_FTR",
-    ]
+    selected_features = SELECTED_FEATURES
 
     missing_features = [col for col in selected_features if col not in df.columns]
     if missing_features:
