@@ -46,12 +46,15 @@ See `ARCHITECTURE.md` for the plan behind productionizing this: batch first, the
 - `data_exploration.py` — ad hoc correlation/heatmap exploration against a season's box scores; not part of the training pipeline.
 
 ### Running it end to end
+
 Dependencies are pinned in `requirements.txt` — install them first:
+
 ```
 pip install -r requirements.txt
 ```
 
 Then run the pipeline:
+
 ```
 python scripts/data_pull/nbaPull_19-25_matchups.py   # only needed to refresh matchup data
 python scripts/modeling/decision_tree_training.py    # builds the training set, trains, saves best_model.pkl
