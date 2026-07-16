@@ -1,7 +1,21 @@
 from nba_api.stats.endpoints import leaguegamefinder
+from curl_cffi import requests as cr
+from nba_api.stats.library.http import NBAStatsHTTP
 import pandas as pd
 import time
 import os
+
+# --- THE NBA TLS BYPASS ---
+# 1. Create a spoofed Chrome 120 session
+session = cr.Session(impersonate="chrome120")
+
+# 2. Do a "warmup" ping to grab the Akamai security cookies
+print("Warming up Akamai cookies...")
+session.get("https://www.nba.com/stats/", timeout=20) 
+
+# 3. Force nba_api to use our spoofed session instead of standard requests
+NBAStatsHTTP.get_session = lambda self: session
+# --------------------------
 
 # Seasons and output filenames
 seasons = {
@@ -61,6 +75,7 @@ for season, filename in seasons.items():
                 'Team2_TOV': team2['TOV'],
                 'Team1_PLUS_MINUS': team1['PLUS_MINUS'],
                 'Team2_PLUS_MINUS': team2['PLUS_MINUS'],
+                'Team1Home': 1 if 'vs.' in team1['MATCHUP'] else 0,
                 'Team1Win': 1 if team1['PTS'] > team2['PTS'] else 0
             }
             all_rows.append(row)
@@ -73,6 +88,6 @@ for season, filename in seasons.items():
     matchups_df['Team2'] = matchups_df['Team2'].str.strip().str.lower()
 
     # Save file
-    os.makedirs("NBAdata", exist_ok=True)
-    matchups_df.to_csv(f'NBAdata/{filename}', index=False)
-    print(f"Saved: NBAdata/{filename} with {len(matchups_df)} games.")
+    os.makedirs("NBAdata/matchups", exist_ok=True)
+    matchups_df.to_csv(f'NBAdata/matchups/{filename}', index=False)
+    print(f"Saved: NBAdata/matchups/{filename} with {len(matchups_df)} games.")

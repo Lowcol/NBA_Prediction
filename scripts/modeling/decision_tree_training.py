@@ -6,7 +6,7 @@ import pandas as pd
 from sklearn.ensemble import BaggingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
@@ -162,11 +162,8 @@ def main() -> None:
 
     selected_features = [
         "Team1_W_PCT",
-        "Team1_PLUS_MINUS",
-        "Team1_PTS",
         "Team2_W_PCT",
-        "Team2_PLUS_MINUS",
-        "Team2_PTS",
+        "Team1Home",
         "Team1_PIE",
         "Team1_eFG%",
         "Team1_TOV%",
@@ -201,6 +198,11 @@ def main() -> None:
     print("Class distribution (Team1Win):")
     print(y.value_counts(normalize=True))
 
+    majority_baseline = max(y.mean(), 1 - y.mean())
+    home_baseline = (X["Team1Home"] == y).mean()
+    print(f"Majority-class baseline accuracy: {majority_baseline:.4f}")
+    print(f"Home-team-always-wins baseline accuracy: {home_baseline:.4f}")
+
     models = {
         "Logistic Regression": LogisticRegression(max_iter=1000),
         "Decision Tree": DecisionTreeClassifier(max_depth=5),
@@ -218,20 +220,24 @@ def main() -> None:
 
     best_model_name = ""
     best_model = None
-    best_score = -1.0
+    best_cv_score = -1.0
 
     for name, model in models.items():
-        model.fit(X_train_scaled, y_train)
-        preds = model.predict(X_test_scaled)
-        acc = accuracy_score(y_test, preds)
-        print(f"{name} Accuracy: {acc:.4f}")
-        if acc > best_score:
-            best_score = acc
+        cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=5, scoring="accuracy")
+        print(f"{name} CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+        if cv_scores.mean() > best_cv_score:
+            best_cv_score = cv_scores.mean()
             best_model_name = name
             best_model = model
 
     if best_model is None:
         raise RuntimeError("No model was trained successfully.")
+
+    best_model.fit(X_train_scaled, y_train)
+    test_preds = best_model.predict(X_test_scaled)
+    test_acc = accuracy_score(y_test, test_preds)
+    print(f"\nBest model: {best_model_name} (CV accuracy: {best_cv_score:.4f})")
+    print(f"Held-out test accuracy: {test_acc:.4f}")
 
     joblib.dump(best_model, MODEL_OUTPUT_PATH)
     joblib.dump(scaler, SCALER_OUTPUT_PATH)
