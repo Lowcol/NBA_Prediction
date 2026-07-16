@@ -1,0 +1,5 @@
+outs:
+- md5: dc330de4bf02ee8f996da8b306edf2fc
+  size: 333975
+  hash: md5
+  path: NBA_Team_Boxscores_2024_25.csv

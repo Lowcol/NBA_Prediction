@@ -4,16 +4,20 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import joblib
+import mlflow
+import mlflow.sklearn
 import pandas as pd
 from curl_cffi import requests as cr
 from nba_api.stats.endpoints import scheduleleaguev2
 from nba_api.stats.library.http import NBAStatsHTTP
+from sklearn.pipeline import Pipeline
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "modeling"))
 
 from decision_tree_training import collect_monthly_files  # noqa: E402
 from features import SELECTED_FEATURES, resolve_stat_columns  # noqa: E402
+from mlflow_config import PRODUCTION_MODEL_URI, tracking_uri  # noqa: E402
 
 MODEL_PATH = PROJECT_ROOT / "NBAdata" / "best_model.pkl"
 SCALER_PATH = PROJECT_ROOT / "NBAdata" / "scaler.pkl"
@@ -77,6 +81,26 @@ def latest_team_stat_row(stats_df: pd.DataFrame, team: str, month: int, resolved
     return candidates.iloc[-1]
 
 
+def load_predictor():
+    """Return a fitted estimator that maps raw features -> prediction.
+
+    Prefers the ``@production`` pipeline from the MLflow registry. Falls back to
+    the local scaler+model pkls (wrapped in the same kind of pipeline) when the
+    registry isn't reachable — e.g. the batch container runs without the
+    sqlite tracking store mounted, so it uses the pkls baked alongside the data.
+    """
+    mlflow.set_tracking_uri(tracking_uri())
+    try:
+        predictor = mlflow.sklearn.load_model(PRODUCTION_MODEL_URI)
+        print(f"Loaded model from registry: {PRODUCTION_MODEL_URI}")
+        return predictor
+    except Exception as exc:
+        print(f"Registry model unavailable ({exc}); falling back to local pkl artifacts.")
+        model = joblib.load(MODEL_PATH)
+        scaler = joblib.load(SCALER_PATH)
+        return Pipeline([("scaler", scaler), ("model", model)])
+
+
 def build_feature_row(home_row: pd.Series, away_row: pd.Series, resolved_map: dict[str, str]) -> dict:
     row = {"Team1Home": 1}
     for model_col, source_col in resolved_map.items():
@@ -108,8 +132,7 @@ def main() -> None:
     resolved_map, selected_cols = resolve_stat_columns(stats_df.columns)
     resolved_cols = [c for c in selected_cols if c not in ("TEAM_NAME", "Season", "Month")]
 
-    model = joblib.load(MODEL_PATH)
-    scaler = joblib.load(SCALER_PATH)
+    predictor = load_predictor()
 
     results = []
     for _, game in day_games.iterrows():
@@ -128,10 +151,9 @@ def main() -> None:
             continue
 
         X = pd.DataFrame([features])[SELECTED_FEATURES]
-        X_scaled = scaler.transform(X)
-        pred = model.predict(X_scaled)[0]
+        pred = predictor.predict(X)[0]
         home_win_prob = (
-            model.predict_proba(X_scaled)[0][1] if hasattr(model, "predict_proba") else None
+            predictor.predict_proba(X)[0][1] if hasattr(predictor, "predict_proba") else None
         )
 
         results.append({

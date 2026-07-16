@@ -2,17 +2,23 @@ from pathlib import Path
 import re
 
 import joblib
+import mlflow
+import mlflow.sklearn
 import pandas as pd
+from mlflow import MlflowClient
+from mlflow.models import infer_signature
 from sklearn.ensemble import BaggingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 
 from features import SELECTED_FEATURES, resolve_stat_columns
+from mlflow_config import PRODUCTION_ALIAS, REGISTERED_MODEL_NAME, tracking_uri
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = PROJECT_ROOT / "NBAdata"
@@ -30,6 +36,10 @@ MONTHLY_DIRS = [
 TRAINING_DATASET_PATH = DATA_ROOT / "NBA_Training_Matchups_2019_2025.csv"
 MODEL_OUTPUT_PATH = DATA_ROOT / "best_model.pkl"
 SCALER_OUTPUT_PATH = DATA_ROOT / "scaler.pkl"
+
+# MLflow experiment name (registry model name/alias + tracking store live in
+# mlflow_config, shared with the batch job).
+MLFLOW_EXPERIMENT_NAME = "nba-win-predictor"
 
 
 def parse_matchup_season_key(path: Path) -> str | None:
@@ -187,31 +197,72 @@ def main() -> None:
         "Bagging SVC": BaggingClassifier(estimator=SVC(gamma="scale"), n_estimators=10, random_state=0),
     }
 
+    mlflow.set_tracking_uri(tracking_uri())
+    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+
     best_model_name = ""
     best_model = None
     best_cv_score = -1.0
 
-    for name, model in models.items():
-        cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=5, scoring="accuracy")
-        print(f"{name} CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
-        if cv_scores.mean() > best_cv_score:
-            best_cv_score = cv_scores.mean()
-            best_model_name = name
-            best_model = model
+    with mlflow.start_run(run_name="training-run"):
+        mlflow.log_param("n_features", len(selected_features))
+        mlflow.log_param("n_train_rows", len(X_train))
+        mlflow.log_param("n_test_rows", len(X_test))
+        mlflow.log_metric("majority_baseline_accuracy", majority_baseline)
+        mlflow.log_metric("home_court_baseline_accuracy", home_baseline)
 
-    if best_model is None:
-        raise RuntimeError("No model was trained successfully.")
+        for name, model in models.items():
+            with mlflow.start_run(run_name=name, nested=True):
+                cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=5, scoring="accuracy")
+                print(f"{name} CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+                mlflow.log_param("model_type", name)
+                mlflow.log_params(model.get_params())
+                mlflow.log_metric("cv_accuracy_mean", cv_scores.mean())
+                mlflow.log_metric("cv_accuracy_std", cv_scores.std())
+            if cv_scores.mean() > best_cv_score:
+                best_cv_score = cv_scores.mean()
+                best_model_name = name
+                best_model = model
 
-    best_model.fit(X_train_scaled, y_train)
-    test_preds = best_model.predict(X_test_scaled)
-    test_acc = accuracy_score(y_test, test_preds)
-    print(f"\nBest model: {best_model_name} (CV accuracy: {best_cv_score:.4f})")
-    print(f"Held-out test accuracy: {test_acc:.4f}")
+        if best_model is None:
+            raise RuntimeError("No model was trained successfully.")
 
-    joblib.dump(best_model, MODEL_OUTPUT_PATH)
-    joblib.dump(scaler, SCALER_OUTPUT_PATH)
-    print(f"Saved best model ({best_model_name}) to {MODEL_OUTPUT_PATH}")
-    print(f"Saved scaler to {SCALER_OUTPUT_PATH}")
+        best_model.fit(X_train_scaled, y_train)
+        test_preds = best_model.predict(X_test_scaled)
+        test_acc = accuracy_score(y_test, test_preds)
+        print(f"\nBest model: {best_model_name} (CV accuracy: {best_cv_score:.4f})")
+        print(f"Held-out test accuracy: {test_acc:.4f}")
+
+        joblib.dump(best_model, MODEL_OUTPUT_PATH)
+        joblib.dump(scaler, SCALER_OUTPUT_PATH)
+        print(f"Saved best model ({best_model_name}) to {MODEL_OUTPUT_PATH}")
+        print(f"Saved scaler to {SCALER_OUTPUT_PATH}")
+
+        # Package the already-fit scaler + model as one raw-features -> prediction
+        # pipeline and register it. Serving loads this single object, so scaling
+        # can't drift from the model it was fit alongside.
+        pipeline = Pipeline([("scaler", scaler), ("model", best_model)])
+        signature = infer_signature(X_test, pipeline.predict(X_test))
+
+        mlflow.log_param("best_model", best_model_name)
+        mlflow.log_metric("cv_accuracy", best_cv_score)
+        mlflow.log_metric("test_accuracy", test_acc)
+
+        model_info = mlflow.sklearn.log_model(
+            pipeline,
+            name="model",
+            signature=signature,
+            input_example=X_test.iloc[:2],
+            registered_model_name=REGISTERED_MODEL_NAME,
+        )
+
+        MlflowClient().set_registered_model_alias(
+            REGISTERED_MODEL_NAME, PRODUCTION_ALIAS, model_info.registered_model_version
+        )
+        print(
+            f"Registered {REGISTERED_MODEL_NAME} v{model_info.registered_model_version} "
+            f"and set alias @{PRODUCTION_ALIAS}"
+        )
 
 
 if __name__ == "__main__":

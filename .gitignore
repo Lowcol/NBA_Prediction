@@ -2,3 +2,7 @@ NBAdata/best_model_SVC.pkl
 NBAdata/data.csv
 __pycache__/
 *.pyc
+
+# MLflow local tracking + registry backend
+mlflow.db
+mlruns/

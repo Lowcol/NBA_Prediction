@@ -1,0 +1,6 @@
+outs:
+- md5: e435bf9b618409cbb66fe9bfd458fb8d.dir
+  size: 817747
+  nfiles: 6
+  hash: md5
+  path: matchups

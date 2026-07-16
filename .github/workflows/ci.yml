@@ -25,6 +25,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Training data lives in the DVC S3 remote, not git. Pull it so the
+      # data-dependent tests (training-set rebuild) have their inputs. The
+      # model pkls stay in git, so model-artifact tests need no pull.
+      - name: Pull data from DVC remote
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: dvc pull
+
       - name: Run tests
         run: python -m pytest tests/ -v
 
