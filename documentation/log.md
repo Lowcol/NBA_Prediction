@@ -2,6 +2,14 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-07-16 — Added CI: pytest suite + Docker build check
+
+**State: `.github/workflows/ci.yml` runs on every push/PR to `main`.**
+
+- Added `tests/` (pytest): feature-resolution logic, batch job's pure-logic pieces (season/date parsing, home/away parsing, stats lookup + fallback), and regression guards for the two bugs already fixed this week — leaked post-game columns reappearing in `SELECTED_FEATURES`, and any combined monthly-stats file's `Season` column not matching its filename. Also checks the full training dataset uses all 6 seasons and that `best_model.pkl`/`scaler.pkl` load and predict correctly.
+- Deliberately excluded from CI: `scripts/data_pull/*` and the batch job's live schedule fetch, since `stats.nba.com` blocks cloud/datacenter IPs (GitHub-hosted runners included) — those stay manual/local-only.
+- `requirements-dev.txt` added (adds `pytest` on top of `requirements.txt`); `conftest.py` at repo root wires up imports since the project has no package structure.
+
 ## 2026-07-16 — Fixed monthly-stats season mislabeling, retrained, started MLOps roadmap
 
 **State: training pipeline now actually uses all 6 seasons; started productionizing per `ARCHITECTURE.md`.**

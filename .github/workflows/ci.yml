@@ -1,0 +1,37 @@
+name: CI
+
+# Deliberately does not run scripts/data_pull/* or the batch job's live
+# fetch_schedule() call: stats.nba.com blocks requests from cloud/datacenter
+# IPs (see README.md), which is exactly what GitHub-hosted runners are. Those
+# stay manual/local-only; everything here tests logic against fixtures or
+# the data already committed to NBAdata/.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build batch job image
+        run: docker build -f docker/Dockerfile.batch -t nba-batch:ci .

@@ -16,6 +16,13 @@ serving/
 docker/
   Dockerfile.batch  # Containerizes the batch job
 
+tests/           # pytest suite — see "Testing" below
+
+documentation/
+  ARCHITECTURE.md  # Plan for productionizing the model
+  log.md           # Dated changelog of major changes
+  PROGRESS.md      # Working scratchpad: task specs, decisions, open questions
+
 NBAdata/
   matchups/                        # One row per game, per season (2019-20 .. 2024-25)
   monthly_stats/                   # Current-season (2024-25) base/advanced/combined team stats by month
@@ -25,7 +32,7 @@ NBAdata/
   best_model.pkl, scaler.pkl       # Latest trained model + the StandardScaler used with it
 ```
 
-See `ARCHITECTURE.md` for the plan behind productionizing this: batch first, then a real-time API, versioning, monitoring, and reliability patterns.
+See `documentation/ARCHITECTURE.md` for the plan behind productionizing this: batch first, then a real-time API, versioning, monitoring, and reliability patterns. `documentation/log.md` is the dated changelog of major changes, and `documentation/PROGRESS.md` is the working scratchpad — task specs, decisions, and open questions behind those changes.
 
 ## Pipeline
 
@@ -76,6 +83,19 @@ python scripts/modeling/decision_tree_training.py    # builds the training set, 
   docker run --rm -v "$(pwd)/NBAdata:/app/NBAdata" nba-batch:latest --date 2025-04-01
   ```
   (On Windows Git Bash, prefix with `MSYS_NO_PATHCONV=1` — otherwise Git Bash rewrites the container-side `/app/...` path.)
+
+## Testing
+
+`tests/` covers the pure-logic pieces of the pipeline (feature resolution, season/date parsing, stats lookup and fallback, home/away parsing) plus a few regression guards for bugs that have bitten this project before — most notably that every combined monthly-stats file's `Season` column actually matches its filename, and that the full training set uses all 6 seasons instead of silently dropping five of them. It also loads the real committed data under `NBAdata/` and the current `best_model.pkl`/`scaler.pkl`, so those checks run without any network access.
+
+What's deliberately **not** covered here: `scripts/data_pull/*` and the batch job's live schedule fetch. Both need `stats.nba.com`, which blocks cloud/datacenter IPs — exactly what CI runners are (see the network note above). Those stay manual/local-only.
+
+```
+pip install -r requirements.txt
+python -m pytest
+```
+
+CI (`.github/workflows/ci.yml`) runs this test suite plus a `docker build` of `docker/Dockerfile.batch` on every push/PR to `main`.
 
 ## Known issues
 
