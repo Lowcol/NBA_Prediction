@@ -53,6 +53,141 @@ User asked me to explain why `requirements-dev.txt` and `conftest.py` were neces
 
 ---
 
+## Phase 2 — MLflow tracking + registry (`ARCHITECTURE.md`)
+
+**Status: in progress.** Roadmap item 2 is "Introduce MLflow (training logs
+runs) and DVC (data snapshots), and point the batch job at the registry's
+Production model instead of a local pickle." Broke into: (a) MLflow training
+instrumentation + registry — **done**; (b) DVC data snapshots — **done, on
+an AWS S3 remote (pending the user adding CI secrets + a commit)**;
+(c) repoint the batch job at the registry — **done**.
+
+### Decisions locked (user chose Pipeline; the other two are recommended defaults, easily reversible)
+- **Model + scaler packaged as one `sklearn.Pipeline`** (user's call).
+  Training wraps the *already-fit* `scaler` + `best_model` in
+  `Pipeline([("scaler", scaler), ("model", best_model)])` purely as a
+  packaging wrapper — it does **not** change the CV/selection math (still
+  scales once up front, then CVs on scaled data). So the registered artifact
+  takes raw features → prediction in one object, and serving can't drift the
+  scaler from the model. Same-day verification confirmed the selected model
+  and accuracy are unchanged (Bagging SVC, CV 0.6070 / test 0.6109).
+- **sqlite tracking backend** (`sqlite:///mlflow.db` at repo root). The
+  MLflow *model registry* (registered models + aliases) does **not** work
+  with the default filesystem store — it needs a DB-backed tracking URI.
+  `mlflow.db` + `mlruns/` are gitignored.
+- **Registry aliases, not stages.** MLflow 3.x (pinned 3.14.0) has *removed*
+  model-version stages entirely, so the roadmap's "Production" is modeled as
+  an alias named `production` (`models:/nba-win-predictor@production`) rather
+  than the deprecated `Production` stage.
+
+### What got built
+- `requirements.txt` — added `mlflow==3.14.0`, `dvc==3.67.1` (dvc pinned now
+  but unused until sub-task (b)).
+- `.gitignore` — added `mlflow.db`, `mlruns/`.
+- `scripts/modeling/decision_tree_training.py` — `main()` now: sets the
+  sqlite tracking URI + `nba-win-predictor` experiment; opens a parent run
+  logging feature/row counts + both baselines; logs one **nested run per
+  candidate model** (params via `get_params()` + CV mean/std); after picking
+  the best, logs `best_model`/`cv_accuracy`/`test_accuracy`, builds the
+  Pipeline, logs it with an inferred signature + input example, registers it
+  as `nba-win-predictor`, and sets the `@production` alias to the new
+  version. The existing local `best_model.pkl`/`scaler.pkl` dump is
+  **untouched** — kept as the batch job's fallback artifacts (see sub-task c).
+- `scripts/modeling/mlflow_config.py` — new. Single source of truth for the
+  registry model name (`nba-win-predictor`), the `production` alias, the
+  `models:/…@production` URI, and the `tracking_uri()` default (local sqlite,
+  overridable via the `MLFLOW_TRACKING_URI` env var). Both training and the
+  batch job import it, so they can't drift on model identity — same reasoning
+  as the shared `features.py`. Training was refactored to import from it
+  rather than hold its own copies.
+- `serving/batch/run_nightly_predictions.py` (sub-task c) — new
+  `load_predictor()` loads `models:/nba-win-predictor@production` from the
+  registry and returns the pipeline; on any failure it prints why and falls
+  back to wrapping the local pkls in the same kind of `Pipeline`. Callers use
+  `predict`/`predict_proba` on **raw** features either way — the manual
+  `scaler.transform` step is gone (the pipeline scales internally).
+  - Why the fallback isn't over-engineering: the batch **container** mounts
+    `NBAdata/` but not the host's `mlflow.db`, so the registry is genuinely
+    unreachable there and the job would otherwise break. Fallback = it uses
+    the pkls baked alongside the mounted data. Local host runs hit the real
+    registry. A tracking *server* (future) would make the registry reachable
+    from the container too, via `MLFLOW_TRACKING_URI`.
+
+### Verification performed
+- Ran the full training script: exit 0, model selection identical to Phase 1,
+  registered `nba-win-predictor` v1 with `@production` set.
+- Loaded `models:/nba-win-predictor@production` back and predicted on a
+  synthetic feature row — works, and the pipeline exposes `predict_proba`
+  (which the batch job needs for `HomeWinProbability`).
+- `git status`: the retrained `.pkl` files are byte-identical to the
+  committed ones (deterministic training), so the working-tree diff is purely
+  the 3 intended files. No pkl restore needed.
+- `pytest tests/ -q`: 24 passed (the training module now imports mlflow;
+  nothing broke). Re-ran after the batch repoint — still 24 passed.
+- Sub-task (c): ran the batch job locally, `--date 2025-04-01` — logged
+  "Loaded model from registry: models:/nba-win-predictor@production" and saved
+  7 predictions. Then forced the fallback (bogus `MLFLOW_TRACKING_URI`):
+  logged "Registry model unavailable … falling back to local pkl artifacts"
+  and still predicted. Verification CSV + throwaway sqlite deleted after.
+
+### Benign warnings seen at log time (noted, not acted on)
+- MLflow warns the inferred schema has integer column(s) — that's
+  `Team1Home` (always 1). Harmless here; would only bite if that column
+  could be missing at inference.
+- MLflow's env-var recorder noticed a stray `IINGO_API_TOKEN` in the shell
+  env during logging. The sklearn pipeline doesn't use it; it's just MLflow
+  cataloguing process env vars. Ignored.
+
+### Open questions / blockers before continuing Phase 2
+- **DVC (sub-task b) is blocked on a decision.** The repo currently commits
+  *all* `NBAdata/` CSVs to git. DVC-tracking them means
+  `git rm -r --cached` the data and moving it behind a DVC remote — a real
+  change to the repo's data workflow, and it needs a remote target (local
+  dir? cloud?). Not started; needs the user's call on whether to pull data
+  out of git and where the DVC remote lives.
+### Sub-task (b): DVC on AWS S3 — what got set up
+- **Remote:** S3 bucket `nba-prediction-dvc-ag` in `us-east-2`, dedicated to
+  DVC. Config in `.dvc/config` (committed): `url = s3://nba-prediction-dvc-ag`,
+  `region = us-east-2`. Bucket is fully private (all public access blocked);
+  DVC authenticates with an IAM user.
+- **Auth:** dedicated least-privilege IAM user `nba-dvc` with a customer policy
+  (`nba-dvc-s3-access`) granting only `s3:ListBucket` + object
+  `Get/Put/Delete` on that one bucket. The access keys live in the user's
+  `~/.aws/credentials` (`[default]`), **outside the repo** — never committed.
+  Connectivity verified via s3fs (List/Write/Read/Delete all OK) before moving
+  data.
+- **What's tracked by DVC (moved out of git):** `archive/`, `matchups/`,
+  `monthly_stats/`, `NBA_Team_Boxscores_2024_25.csv`,
+  `NBA_Training_Matchups_2019_2025.csv` — via per-path `.dvc` pointer files +
+  a DVC-managed `NBAdata/.gitignore`. **Kept in git:** `best_model.pkl`,
+  `scaler.pkl` (tiny, they're the batch fallback artifacts and already in the
+  registry — keeping them in git means the model-artifact tests need no
+  `dvc pull`). `dvc push` uploaded 29 objects; `dvc status -c` reports cache
+  and remote in sync.
+- **Deps gotcha:** `dvc-s3` (s3fs/aiobotocore) was enough for the s3fs probe,
+  but `dvc push` itself also needs `boto3`. `requirements.txt` now pins
+  `dvc[s3]==3.67.1` (pulls boto3 + s3fs), so CI gets the full S3 stack.
+- **CI:** `ci.yml`'s test job gained a `dvc pull` step (before pytest) that
+  reads `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` from GitHub Actions
+  secrets. The `docker-build` job is untouched (it doesn't need data).
+
+### Still needed to close sub-task (b)
+- **User action:** add the two GitHub repo secrets `AWS_ACCESS_KEY_ID` and
+  `AWS_SECRET_ACCESS_KEY` (Settings → Secrets and variables → Actions). Until
+  then the CI `dvc pull` step will fail.
+- **Not yet proven:** a true fresh-machine `dvc pull` *from S3* (local runs
+  hit the cache). Push succeeded + remote is in sync, so the data is there;
+  the first CI run after the secrets are added is the real end-to-end test.
+- `test_model_artifacts.py` left as-is: it still asserts the local
+  `best_model.pkl`/`scaler.pkl` exist + scaler shape, which now doubles as a
+  guard on the batch job's fallback artifacts. No registry-loading test was
+  added to CI on purpose — a fresh checkout has no `mlflow.db` and nothing
+  registered, so such a test couldn't pass there (same reasoning that keeps
+  live-API paths out of CI).
+- Nothing committed yet — waiting on explicit "commit this."
+
+---
+
 ## Phase 1 — batch prediction job (`ARCHITECTURE.md`)
 
 **Status: done.**

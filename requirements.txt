@@ -8,3 +8,5 @@ curl_cffi==0.15.0
 matplotlib==3.10.0
 seaborn==0.13.2
 pytest==9.1.1
+mlflow==3.14.0
+dvc[s3]==3.67.1
