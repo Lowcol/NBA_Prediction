@@ -23,16 +23,33 @@ documentation/
   log.md           # Dated changelog of major changes
   PROGRESS.md      # Working scratchpad: task specs, decisions, open questions
 
-NBAdata/
-  matchups/                        # One row per game, per season (2019-20 .. 2024-25)
-  monthly_stats/                   # Current-season (2024-25) base/advanced/combined team stats by month
-  archive/historical/monthly_stats/# Same, for past seasons (2019-20 .. 2023-24)
+NBAdata/                           # (see "Data (DVC + S3)" below — most of this is not in git)
+  matchups/                        # [DVC] One row per game, per season (2019-20 .. 2024-25)
+  monthly_stats/                   # [DVC] Current-season (2024-25) base/advanced/combined team stats by month
+  archive/historical/monthly_stats/# [DVC] Same, for past seasons (2019-20 .. 2023-24)
   predictions/                     # Batch job output, one CSV per predicted slate date
-  NBA_Training_Matchups_2019_2025.csv  # Combined training set built by decision_tree_training.py
-  best_model.pkl, scaler.pkl       # Latest trained model + the StandardScaler used with it
+  NBA_Training_Matchups_2019_2025.csv  # [DVC] Combined training set built by decision_tree_training.py
+  best_model.pkl, scaler.pkl       # [git] Latest trained model + StandardScaler (kept in git as the batch fallback)
 ```
 
+`[DVC]` paths live in S3, not git — run `dvc pull` after cloning to fetch them (see below). `[git]` paths are committed.
+
 See `documentation/ARCHITECTURE.md` for the plan behind productionizing this: batch first, then a real-time API, versioning, monitoring, and reliability patterns. `documentation/log.md` is the dated changelog of major changes, and `documentation/PROGRESS.md` is the working scratchpad — task specs, decisions, and open questions behind those changes.
+
+## Data (DVC + S3)
+
+The training data under `NBAdata/` (`matchups/`, `monthly_stats/`, `archive/`, and the combined training CSVs) is versioned with [DVC](https://dvc.org/) and stored in S3 (`s3://nba-prediction-dvc-ag`, `us-east-2`), **not** in git. A fresh clone only has the `.dvc` pointer files until you pull:
+
+```
+pip install -r requirements.txt          # includes dvc[s3]
+dvc pull                                 # downloads NBAdata/ from S3
+```
+
+`dvc pull` needs AWS credentials for the bucket — configure `~/.aws/credentials` (or the standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars) before running it. `best_model.pkl`/`scaler.pkl` are the exception: they stay in git as the batch job's fallback model, so model-artifact checks work without a pull.
+
+## MLflow tracking & registry
+
+Training logs to MLflow (local sqlite store, `mlflow.db`, gitignored). Each run records the per-model CV scores, packages the best scaler+model as one `sklearn.Pipeline`, registers it as **`nba-win-predictor`**, and moves the **`@production`** alias to that new version. The batch job loads `models:/nba-win-predictor@production` from the registry, falling back to the local `best_model.pkl`/`scaler.pkl` when the registry isn't reachable. Registry name and alias live in `scripts/modeling/mlflow_config.py`, shared by training and serving so they can't drift.
 
 ## Pipeline
 
@@ -60,25 +77,29 @@ Dependencies are pinned in `requirements.txt` — install them first:
 pip install -r requirements.txt
 ```
 
-Then run the pipeline:
+Fetch the data (see "Data (DVC + S3)" above), then run the pipeline:
 
 ```
+dvc pull                                             # fetch NBAdata/ from S3 (needs AWS creds)
 python scripts/data_pull/nbaPull_19-25_matchups.py   # only needed to refresh matchup data
 python scripts/modeling/decision_tree_training.py    # builds the training set, trains, saves best_model.pkl
 ```
+
+The training run also logs to MLflow (`mlflow.db`), registers the best model as `nba-win-predictor`, and points the `@production` alias at it — not just `best_model.pkl` on disk.
 
 ## Serving
 
 4. **Batch predictions** (`serving/batch/`)
 
-- `run_nightly_predictions.py` — predicts an upcoming slate of games. Fetches that day's schedule via `nba_api`'s `ScheduleLeagueV2` (home/away comes directly from the schedule, no `MATCHUP`-string parsing needed), looks up each team's most recent monthly stats using the same feature contract as training (`scripts/modeling/features.py`), and writes `NBAdata/predictions/predictions_<date>.csv` with a predicted winner and win probability per game.
+- `run_nightly_predictions.py` — predicts an upcoming slate of games. Fetches that day's schedule via `nba_api`'s `ScheduleLeagueV2` (home/away comes directly from the schedule, no `MATCHUP`-string parsing needed), looks up each team's most recent monthly stats using the same feature contract as training (`scripts/modeling/features.py`), and writes `NBAdata/predictions/predictions_<date>.csv` with a predicted winner and win probability per game. It loads the `@production` model from the MLflow registry, falling back to the local `best_model.pkl`/`scaler.pkl` when the registry isn't reachable — which is what happens inside the container, since `mlflow.db` isn't mounted, so it always uses the mounted pkls.
 - Run locally:
   ```
   python serving/batch/run_nightly_predictions.py                  # predicts tomorrow's slate
   python serving/batch/run_nightly_predictions.py --date 2025-04-01 # predicts a specific date (also useful for testing against a past date)
   ```
-- Run via Docker (`docker/Dockerfile.batch`) — the image holds the code only; `NBAdata/` (model, scaler, stats) is mounted at runtime so the container always reads/writes the current data on disk:
+- Run via Docker (`docker/Dockerfile.batch`) — the image holds the code only; `NBAdata/` (model, scaler, stats) is mounted at runtime so the container always reads/writes the current data on disk. Run `dvc pull` first so the mounted `NBAdata/` actually has the monthly stats and pkls:
   ```
+  dvc pull                                  # populate NBAdata/ before mounting it
   docker build -f docker/Dockerfile.batch -t nba-batch:latest .
   docker run --rm -v "$(pwd)/NBAdata:/app/NBAdata" nba-batch:latest --date 2025-04-01
   ```
@@ -86,16 +107,17 @@ python scripts/modeling/decision_tree_training.py    # builds the training set, 
 
 ## Testing
 
-`tests/` covers the pure-logic pieces of the pipeline (feature resolution, season/date parsing, stats lookup and fallback, home/away parsing) plus a few regression guards for bugs that have bitten this project before — most notably that every combined monthly-stats file's `Season` column actually matches its filename, and that the full training set uses all 6 seasons instead of silently dropping five of them. It also loads the real committed data under `NBAdata/` and the current `best_model.pkl`/`scaler.pkl`, so those checks run without any network access.
+`tests/` covers the pure-logic pieces of the pipeline (feature resolution, season/date parsing, stats lookup and fallback, home/away parsing, the registry→pkl model-loading fallback) plus a few regression guards for bugs that have bitten this project before — most notably that every combined monthly-stats file's `Season` column actually matches its filename, and that the full training set uses all 6 seasons instead of silently dropping five of them. The model-artifact and pure-logic tests run offline against the git-tracked `best_model.pkl`/`scaler.pkl`, but the data-dependent tests read `NBAdata/matchups/` and `monthly_stats/`, which are DVC-tracked — run `dvc pull` first (needs AWS creds) or those tests will fail on a fresh clone.
 
 What's deliberately **not** covered here: `scripts/data_pull/*` and the batch job's live schedule fetch. Both need `stats.nba.com`, which blocks cloud/datacenter IPs — exactly what CI runners are (see the network note above). Those stay manual/local-only.
 
 ```
 pip install -r requirements.txt
+dvc pull                        # fetch DVC-tracked data (needs AWS creds); skip only if running pkl/pure-logic tests
 python -m pytest
 ```
 
-CI (`.github/workflows/ci.yml`) runs this test suite plus a `docker build` of `docker/Dockerfile.batch` on every push/PR to `main`.
+CI (`.github/workflows/ci.yml`) runs `dvc pull` (using AWS secrets) and this test suite, plus a `docker build` of `docker/Dockerfile.batch`, on every push/PR to `main`.
 
 ## Known issues
 

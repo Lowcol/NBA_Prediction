@@ -15,9 +15,15 @@ concern.
 - `scripts/data_prep/merge_advanced_base_stats.py` builds monthly team-stat tables.
 - `scripts/modeling/decision_tree_training.py` builds the training frame, cross-validates
   6 classifiers, and `joblib.dump`s the winner to `NBAdata/best_model.pkl` / `scaler.pkl`.
-- Nothing after that. No API, no container, no scheduled job, no registry, no
-  dashboard. Getting a prediction means running the script by hand and reading
-  a pickle in a notebook.
+
+**Progress so far** (phases 1–2 of §9 are done — see `PROGRESS.md`/`log.md`):
+
+- The batch job (`serving/batch/run_nightly_predictions.py`) is built and containerized (`docker/Dockerfile.batch`).
+- Training logs to the MLflow registry and promotes via the `@production` alias; the batch job loads that model (local-pkl fallback).
+- Training data is versioned in DVC on S3.
+
+Still missing (the rest of §9): the real-time API, circuit breaker, shadow
+deployment, monitoring dashboard, and load testing.
 
 **Target:** (batch first — the nightly job is the priority; the on-demand
 real-time API is deferred to the last build phase, see §9)
@@ -26,7 +32,7 @@ real-time API is deferred to the last build phase, see §9)
   an on-demand real-time API, and a nightly batch job that predicts the next
   slate of games.
 - Every training run is logged to a model registry; promoting a model to
-  production is a deliberate stage transition, not overwriting a `.pkl` file.
+  production is a deliberate alias move, not overwriting a `.pkl` file.
 - The API degrades gracefully (circuit breaker → heuristic fallback) instead
   of failing a caller when the model service has a problem.
 - New model versions are validated in shadow before they take live traffic.
@@ -46,7 +52,7 @@ flowchart TB
 
     subgraph Train["Training"]
         Trainer["Training script\nscripts/modeling/ (extended)"]
-        Registry[("MLflow Model Registry\nStaging / Production / Archived")]
+        Registry[("MLflow Model Registry\n@production alias")]
     end
 
     subgraph Package["Packaging"]
@@ -121,7 +127,7 @@ sequenceDiagram
     Cron->>Batch: trigger
     Batch->>API_NBA: fetch upcoming slate + latest team stats
     Batch->>Batch: build features (same pipeline as training)
-    Batch->>Model: load from registry (Production stage)
+    Batch->>Model: load from registry (@production alias)
     Model-->>Batch: predictions for each game
     Batch->>Store: write predictions
     Batch->>Metrics: log job duration, rows processed, errors
@@ -174,9 +180,11 @@ NBA_Prediction/
 ## 7. Versioning strategy
 
 - **Models:** MLflow Model Registry. Each training run logs params, metrics,
-  and the model artifact; promotion is an explicit stage transition
-  (`None → Staging → Production → Archived`), so "what's live" is always a
-  queryable fact, not "whatever `best_model.pkl` currently contains."
+  and the model artifact; promotion moves the **`@production` alias** to the
+  chosen version, so "what's live" is always a queryable fact, not "whatever
+  `best_model.pkl` currently contains." (MLflow 3.x removed the old
+  `None → Staging → Production → Archived` stages in favor of named aliases;
+  `@production` is this project's promotion mechanism.)
 - **Data:** DVC tracking the `NBAdata/` training snapshot, so a given model
   version can be traced back to the exact data it was trained on.
 - **Code:** git, already in place.
@@ -201,12 +209,12 @@ NBA_Prediction/
 Batch is the priority; the on-demand real-time API is deferred to the end of
 this list.
 
-1. Package the existing `best_model.pkl`/`scaler.pkl` into a Docker image and
+1. **(done)** Package the existing `best_model.pkl`/`scaler.pkl` into a Docker image and
    build the nightly batch job (same feature pipeline, predicts the next
    slate of games, writes results to a predictions store). Get batch working
    end to end first.
-2. Introduce MLflow (training script logs runs) and DVC (data snapshots), and
-   point the batch job at the registry's Production model instead of a local
+2. **(done)** Introduce MLflow (training script logs runs) and DVC (data snapshots), and
+   point the batch job at the registry's production model instead of a local
    pickle.
 3. Add Prometheus instrumentation for the batch job (job duration, rows
    processed, errors) + a Grafana dashboard, including feature drift
