@@ -2,6 +2,16 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-07-21 — Phase 2: MLflow tracking/registry + DVC data on S3, batch repointed at the registry
+
+**State: training logs to MLflow and registers `@production`; data moved to DVC/S3; batch job loads from the registry with a local-pkl fallback.**
+
+- `decision_tree_training.py` now logs to MLflow (local sqlite `mlflow.db`, gitignored): a parent run plus a nested run per candidate model (params + CV mean/std). After selecting the best model it packages the already-fit `StandardScaler` + model as a single raw-features→prediction `sklearn.Pipeline`, logs it with an inferred signature, registers it as `nba-win-predictor`, and moves the `@production` alias to the new version. Registry name/alias/tracking URI live in the shared `scripts/modeling/mlflow_config.py` so training and serving can't drift. Still writes `best_model.pkl`/`scaler.pkl` as before. MLflow 3.x uses **aliases**, not stages (stages were removed) — `@production` is the promotion mechanism.
+- `run_nightly_predictions.py` `load_predictor()` loads `models:/nba-win-predictor@production` from the registry, falling back to the local pkls (wrapped in the same Pipeline) when the registry is unreachable — which is what the container does, since `mlflow.db` isn't mounted. If both the registry and the pkls are unavailable it now raises a clear error pointing at the `NBAdata/` mount, instead of an uncaught `FileNotFoundError`.
+- Training data (`matchups/`, `monthly_stats/`, `archive/`, combined training CSVs) moved out of git into DVC, stored in S3 (`s3://nba-prediction-dvc-ag`, `us-east-2`); `.dvc` pointers are committed, the data is gitignored. `best_model.pkl`/`scaler.pkl` intentionally stay in git as the batch fallback. CI gained a `dvc pull` step (AWS secrets) before pytest; `requirements.txt` adds `mlflow==3.14.0` and `dvc[s3]==3.67.1`.
+- Fixed a season-boundary bug in `latest_team_stat_row`'s fallback: it sorted months numerically (1..12) and returned December instead of the chronologically-latest month across the Oct–Jun season; now sorted on a season-relative ordinal.
+- Test-infra note (supersedes the 2026-07-16 entry below): `requirements-dev.txt` and the root `conftest.py` were dropped — test deps are merged into `requirements.txt` and imports are resolved via `pytest.ini`'s `pythonpath`.
+
 ## 2026-07-16 — Added CI: pytest suite + Docker build check
 
 **State: `.github/workflows/ci.yml` runs on every push/PR to `main`.**

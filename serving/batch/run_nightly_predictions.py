@@ -75,9 +75,13 @@ def latest_team_stat_row(stats_df: pd.DataFrame, team: str, month: int, resolved
         return exact.iloc[-1]
 
     # Fall back to the most recent month on file with usable stats for this team.
-    candidates = team_rows.dropna(subset=resolved_cols, how="all").sort_values("Month")
+    # NBA seasons cross the calendar year (Oct=10..Dec=12, then Jan=1..Jun=6), so a plain
+    # numeric sort on Month puts December last. Sort on a season-relative ordinal instead
+    # ((month - 10) % 12) so Oct < Nov < ... < Jun and iloc[-1] is chronologically latest.
+    candidates = team_rows.dropna(subset=resolved_cols, how="all").copy()
     if candidates.empty:
         return None
+    candidates = candidates.sort_values(by="Month", key=lambda m: (m - 10) % 12)
     return candidates.iloc[-1]
 
 
@@ -96,6 +100,13 @@ def load_predictor():
         return predictor
     except Exception as exc:
         print(f"Registry model unavailable ({exc}); falling back to local pkl artifacts.")
+        if not MODEL_PATH.exists() or not SCALER_PATH.exists():
+            raise RuntimeError(
+                "No model available: the MLflow registry is unreachable and the local pkl "
+                f"artifacts are missing ({MODEL_PATH}, {SCALER_PATH}). Either make the registry "
+                "reachable, or mount NBAdata/ (with best_model.pkl + scaler.pkl) into the "
+                "container at runtime, e.g. `docker run -v \"$(pwd)/NBAdata:/app/NBAdata\" ...`."
+            ) from exc
         model = joblib.load(MODEL_PATH)
         scaler = joblib.load(SCALER_PATH)
         return Pipeline([("scaler", scaler), ("model", model)])
