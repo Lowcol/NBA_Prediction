@@ -10,3 +10,5 @@ mlruns/
 
 # Auto-generated daily chat logs (personal, not part of the project)
 conversations/
+
+.claude/
