@@ -11,10 +11,13 @@ scripts/
   modeling/      # Trains and evaluates the prediction model; features.py is the shared feature contract
 
 serving/
+  inference/     # Shared model-loading + feature-assembly code (used by both batch and api)
   batch/         # Nightly batch job: predicts an upcoming slate of games
+  api/           # Real-time FastAPI service: POST /predict, GET /health
 
 docker/
   Dockerfile.batch  # Containerizes the batch job
+  Dockerfile.api    # Containerizes the real-time API
 
 tests/           # pytest suite — see "Testing" below
 
@@ -105,9 +108,30 @@ The training run also logs to MLflow (`mlflow.db`), registers the best model as 
   ```
   (On Windows Git Bash, prefix with `MSYS_NO_PATHCONV=1` — otherwise Git Bash rewrites the container-side `/app/...` path.)
 
+5. **Real-time API** (`serving/api/`)
+
+- A FastAPI service that predicts a single game on demand. `POST /predict` with `{"home_team": "...", "away_team": "...", "date": "YYYY-MM-DD"}` (date optional, defaults to today) returns the predicted winner and the home team's win probability. It does the same stat lookup and feature-building as the batch job — the shared code lives in `serving/inference/predictor.py` — and loads the `@production` model once at startup (falling back to the local pkls, same as the batch job). `GET /health` reports whether the model loaded and whether the current season's stats are on file.
+- Error responses: unknown team or no stats on file → 404; stats present but a required feature is missing → 422; the season's stats file isn't provisioned, or the model failed to load → 503.
+- Run locally (needs `NBAdata/` populated — `dvc pull` first for the stats, and the pkls are already in git):
+  ```
+  uvicorn main:app --app-dir serving/api --reload      # serves on http://localhost:8000
+  ```
+  Then, e.g.:
+  ```
+  curl -X POST http://localhost:8000/predict \
+    -H "Content-Type: application/json" \
+    -d '{"home_team": "Denver Nuggets", "away_team": "Miami Heat", "date": "2025-04-01"}'
+  ```
+- Run via Docker (`docker/Dockerfile.api`) — same mount pattern as the batch image:
+  ```
+  dvc pull                                  # populate NBAdata/ before mounting it
+  docker build -f docker/Dockerfile.api -t nba-api:latest .
+  docker run --rm -p 8000:8000 -v "$(pwd)/NBAdata:/app/NBAdata" nba-api:latest
+  ```
+
 ## Testing
 
-`tests/` covers the pure-logic pieces of the pipeline (feature resolution, season/date parsing, stats lookup and fallback, home/away parsing, the registry→pkl model-loading fallback) plus a few regression guards for bugs that have bitten this project before — most notably that every combined monthly-stats file's `Season` column actually matches its filename, and that the full training set uses all 6 seasons instead of silently dropping five of them. The model-artifact and pure-logic tests run offline against the git-tracked `best_model.pkl`/`scaler.pkl`, but the data-dependent tests read `NBAdata/matchups/` and `monthly_stats/`, which are DVC-tracked — run `dvc pull` first (needs AWS creds) or those tests will fail on a fresh clone.
+`tests/` covers the pure-logic pieces of the pipeline (feature resolution, season/date parsing, stats lookup and fallback, home/away parsing, the registry→pkl model-loading fallback) and the real-time API (`/health` and `/predict` happy path + error branches, with the model and stats mocked so the tests stay offline), plus a few regression guards for bugs that have bitten this project before — most notably that every combined monthly-stats file's `Season` column actually matches its filename, and that the full training set uses all 6 seasons instead of silently dropping five of them. The model-artifact and pure-logic tests run offline against the git-tracked `best_model.pkl`/`scaler.pkl`, but the data-dependent tests read `NBAdata/matchups/` and `monthly_stats/`, which are DVC-tracked — run `dvc pull` first (needs AWS creds) or those tests will fail on a fresh clone.
 
 What's deliberately **not** covered here: `scripts/data_pull/*` and the batch job's live schedule fetch. Both need `stats.nba.com`, which blocks cloud/datacenter IPs — exactly what CI runners are (see the network note above). Those stay manual/local-only.
 

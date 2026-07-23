@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
-import run_nightly_predictions
+import predictor
 from run_nightly_predictions import (
     build_feature_row,
     games_on_date,
@@ -102,13 +102,11 @@ def test_latest_team_stat_row_returns_none_when_all_rows_are_nan():
 
 def test_load_predictor_returns_registry_model_when_available(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr(run_nightly_predictions.mlflow, "set_tracking_uri", lambda uri: None)
-    monkeypatch.setattr(
-        run_nightly_predictions.mlflow.sklearn, "load_model", lambda uri: sentinel
-    )
+    monkeypatch.setattr(predictor.mlflow, "set_tracking_uri", lambda uri: None)
+    monkeypatch.setattr(predictor.mlflow.sklearn, "load_model", lambda uri: sentinel)
     # If the registry loads, the local pkls must not be touched.
     monkeypatch.setattr(
-        run_nightly_predictions.joblib,
+        predictor.joblib,
         "load",
         lambda path: (_ for _ in ()).throw(AssertionError("pkl fallback should not run")),
     )
@@ -124,17 +122,17 @@ def test_load_predictor_falls_back_to_local_pkls_when_registry_unavailable(monke
         raise RuntimeError("registry not reachable")
 
     def fake_joblib_load(path):
-        return fake_scaler if path == run_nightly_predictions.SCALER_PATH else fake_model
+        return fake_scaler if path == predictor.SCALER_PATH else fake_model
 
-    monkeypatch.setattr(run_nightly_predictions.mlflow, "set_tracking_uri", lambda uri: None)
-    monkeypatch.setattr(run_nightly_predictions.mlflow.sklearn, "load_model", raise_unavailable)
-    monkeypatch.setattr(run_nightly_predictions.joblib, "load", fake_joblib_load)
+    monkeypatch.setattr(predictor.mlflow, "set_tracking_uri", lambda uri: None)
+    monkeypatch.setattr(predictor.mlflow.sklearn, "load_model", raise_unavailable)
+    monkeypatch.setattr(predictor.joblib, "load", fake_joblib_load)
 
-    predictor = load_predictor()
+    loaded = load_predictor()
 
-    assert isinstance(predictor, Pipeline)
-    assert predictor.named_steps["scaler"] is fake_scaler
-    assert predictor.named_steps["model"] is fake_model
+    assert isinstance(loaded, Pipeline)
+    assert loaded.named_steps["scaler"] is fake_scaler
+    assert loaded.named_steps["model"] is fake_model
 
 
 def test_build_feature_row_prefixes_home_and_away_correctly():

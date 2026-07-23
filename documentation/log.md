@@ -2,6 +2,16 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-07-22 — Phase 4: real-time FastAPI prediction service + shared inference module
+
+**State: a `/predict` + `/health` API serves live single-game predictions from the same `@production` model the batch job uses.**
+
+- Built `serving/api/` (FastAPI): `POST /predict` takes `{home_team, away_team, date}`, looks up each team's latest monthly stats server-side (same feature contract as training), and returns the predicted winner + home-win probability. `GET /health` reports whether the model loaded and whether the current season's stats are on file. The model is loaded once at startup via FastAPI's `lifespan` (a registry/pkl load is expensive; per-request would re-hit MLflow every call).
+- Extracted the model-loading and feature-assembly code out of `run_nightly_predictions.py` into `serving/inference/predictor.py`, now imported by both the batch job and the API — one source of truth so the two serving paths can't drift (same rationale as the shared `features.py`/`mlflow_config.py`). Added two thin shared helpers, `assemble_features` and `predict_from_features`. The batch job re-exports the moved names, so its imports/tests keep working; the two `load_predictor` tests had their mock targets retargeted to `predictor.*`.
+- `/predict` error mapping: unknown team / no usable stats → 404; stats present but a required feature missing → 422; season stats file absent or model not loaded → 503; malformed body → 422 (Pydantic).
+- Packaged as `docker/Dockerfile.api` (uvicorn, port 8000; `NBAdata/` mounted at runtime, same as the batch image). `requirements.txt` adds `fastapi`, `uvicorn[standard]`, `pydantic`, `httpx`; CI builds the API image alongside the batch image; `pytest.ini` gains `serving/inference` + `serving/api`. New offline `tests/test_api.py` (FastAPI `TestClient`, model + stats mocked, no network) covers the happy path and every error branch.
+- **Reordered vs. `ARCHITECTURE.md` §9:** built the real-time API (phase 4) before batch Prometheus (phase 3). A short-lived batch job can't be scraped by Prometheus directly (needs a push gateway); a long-running API is naturally scrapeable, so it's the better monitoring target — phase 3's `/metrics` will target this app. Circuit breaker (5), shadow deployment (6), and load testing (7) remain deferred.
+
 ## 2026-07-21 — Phase 2: MLflow tracking/registry + DVC data on S3, batch repointed at the registry
 
 **State: training logs to MLflow and registers `@production`; data moved to DVC/S3; batch job loads from the registry with a local-pkl fallback.**

@@ -44,3 +44,6 @@ jobs:
 
       - name: Build batch job image
         run: docker build -f docker/Dockerfile.batch -t nba-batch:ci .
+
+      - name: Build API image
+        run: docker build -f docker/Dockerfile.api -t nba-api:ci .

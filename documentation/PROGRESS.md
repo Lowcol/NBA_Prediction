@@ -7,6 +7,39 @@ behind it. Read this first when resuming work after a context gap.
 
 ---
 
+## Phase 4 — real-time FastAPI API (`ARCHITECTURE.md`), built ahead of phase 3
+
+**Status: code + tests done, docs updated; not committed yet — waiting on explicit "commit this."**
+
+### Spec / why reordered
+`ARCHITECTURE.md` §9 lists batch Prometheus (phase 3) before the real-time API (phase 4). User chose to build the API first, reasoning it's more useful to have a live prediction endpoint and to monitor *that*. Technically it's also the cleaner order: a short-lived batch job can't be scraped by Prometheus (needs a push gateway / textfile collector); a long-running API is natively scrapeable via a `/metrics` route — so phase 3's instrumentation should target the API. Prometheus, circuit breaker (5), shadow (6), and load testing (7) all stay deferred and out of this phase.
+
+### Decisions confirmed with the user (AskUserQuestion)
+- **`/predict` input = `{home_team, away_team, date}`** with server-side stat lookup (same as batch), not a raw feature vector. More useful; needs `NBAdata/` mounted (already the pattern).
+- **Shared inference EXTRACTED, not duplicated** — moved `load_predictor` + feature-assembly out of `run_nightly_predictions.py` into `serving/inference/predictor.py`, imported by both batch and API. One source of truth, same rationale as shared `features.py`/`mlflow_config.py`.
+- Defaults taken (not separately asked): single `requirements.txt`; per-request `load_team_stats` (no caching yet); HTTP mapping 404 (unknown team/no stats) / 422 (missing feature) / 503 (season file absent or model unloaded).
+
+### What got built
+- `serving/inference/predictor.py` — moved `season_label_for_date`, `load_predictor` (registry@production + local-pkl fallback, unchanged), `load_team_stats`, `latest_team_stat_row`, `build_feature_row`, plus new thin helpers `assemble_features` (both teams' latest stats → one feature row, None if unusable) and `predict_from_features` (select SELECTED_FEATURES, return `(home_win, prob)`; `predict_proba` guarded with `hasattr`).
+- `serving/api/main.py` — FastAPI app; model loaded once at startup via `lifespan` into `app.state.predictor`; `GET /health` (model_loaded + stats_available), `POST /predict`.
+- `serving/api/models.py` — Pydantic v2 `PredictRequest`/`PredictResponse`.
+- `serving/batch/run_nightly_predictions.py` — now imports the moved fns from `predictor`, keeps `fetch_schedule`/`games_on_date`/`PREDICTIONS_DIR`, loop rewired through `assemble_features`/`predict_from_features`. Re-exports the moved names (`__all__`) so existing imports keep resolving.
+- `docker/Dockerfile.api` (uvicorn, 8000), `requirements.txt` (+fastapi, uvicorn[standard], pydantic, httpx), `pytest.ini` (+serving/inference, +serving/api), `ci.yml` (+API image build), `tests/test_api.py` (offline TestClient: happy path + 404/422/503/malformed).
+
+### Two shadowing bugs caught by tests before review (both fixed)
+- `models.py`: a Pydantic field named `date` with annotation `date | None` shadowed the `datetime.date` type → `TypeError: unsupported operand |: NoneType, NoneType`. Fixed by importing `from datetime import date as _date` and annotating with `_date`.
+- `test_batch_predictions.py`: a test local var `predictor = load_predictor()` shadowed the `import predictor` module → `UnboundLocalError`. Renamed the local to `loaded`.
+
+### Verification performed
+- `python -m pytest tests/test_api.py tests/test_batch_predictions.py tests/test_mlflow_config.py tests/test_features.py -v` → **27 passed** offline. (The 3 `test_training_pipeline.py` tests still need `dvc pull` — pre-existing, untouched by this phase.)
+- Two review agents spawned (code quality + plan conformance) — findings pending at time of writing.
+
+### Open questions / follow-ups
+- Nothing committed yet.
+- Phase 3 (`/metrics` on this API + Grafana + drift) is the natural next step.
+
+---
+
 ## Active task: CI/CD test suite (out-of-band request, not on the `ARCHITECTURE.md` roadmap)
 
 **Status: done.**

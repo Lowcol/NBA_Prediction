@@ -16,14 +16,22 @@ concern.
 - `scripts/modeling/decision_tree_training.py` builds the training frame, cross-validates
   6 classifiers, and `joblib.dump`s the winner to `NBAdata/best_model.pkl` / `scaler.pkl`.
 
-**Progress so far** (phases 1–2 of §9 are done — see `PROGRESS.md`/`log.md`):
+**Progress so far** (phases 1, 2, and 4 of §9 are done — see `PROGRESS.md`/`log.md`):
 
 - The batch job (`serving/batch/run_nightly_predictions.py`) is built and containerized (`docker/Dockerfile.batch`).
 - Training logs to the MLflow registry and promotes via the `@production` alias; the batch job loads that model (local-pkl fallback).
 - Training data is versioned in DVC on S3.
+- The real-time API (`serving/api/`, `docker/Dockerfile.api`) is built: `POST /predict` (two team names + date) and `GET /health`, loading the same `@production` model at startup. The model-loading and feature-assembly code it shares with the batch job now lives in `serving/inference/predictor.py`.
 
-Still missing (the rest of §9): the real-time API, circuit breaker, shadow
-deployment, monitoring dashboard, and load testing.
+Note on ordering: §9 lists batch monitoring (phase 3) before the real-time API
+(phase 4), but we built the API first. A short-lived batch job can't be scraped
+by Prometheus directly (it needs a push gateway), whereas a long-running API is
+naturally scrapeable — so the API is the better monitoring target, and doing it
+first means phase 3's instrumentation can target it.
+
+Still missing (the rest of §9): monitoring dashboard + feature-drift tracking
+(phase 3), circuit breaker (phase 5), shadow deployment (phase 6), and load
+testing (phase 7).
 
 **Target:** (batch first — the nightly job is the priority; the on-demand
 real-time API is deferred to the last build phase, see §9)
@@ -216,16 +224,27 @@ this list.
 2. **(done)** Introduce MLflow (training script logs runs) and DVC (data snapshots), and
    point the batch job at the registry's production model instead of a local
    pickle.
-3. Add Prometheus instrumentation for the batch job (job duration, rows
-   processed, errors) + a Grafana dashboard, including feature drift
-   tracking.
-4. Build the real-time FastAPI service (`/predict`, `/health`) on top of the
-   same Docker-packaged model.
+3. Add Prometheus instrumentation (job duration, rows processed, errors) + a
+   Grafana dashboard, including feature drift tracking. (Reordered after phase 4
+   so it can target the long-running API's `/metrics` endpoint rather than
+   push-gatewaying the short-lived batch job.)
+4. **(done)** Build the real-time FastAPI service (`/predict`, `/health`) on top of the
+   same Docker-packaged model. Shared model-loading/feature code extracted to
+   `serving/inference/predictor.py`; a `/metrics` endpoint slots onto this app
+   when phase 3 lands.
 5. Add the circuit breaker + heuristic fallback to the real-time API.
 6. Add shadow deployment support (run a candidate model alongside
    production, on real-time and/or batch predictions).
 7. Add Locust load tests against the real-time API; tune based on results.
 8. (Optional) CI/CD to build/push the Docker image and run tests on merge.
+9. **(later — when the data outgrows one machine)** Move model training off the
+   local laptop onto a dedicated AWS EC2 instance that reads the training data
+   straight from the S3/DVC remote, instead of `dvc pull`-ing it down to a
+   developer machine first. This is the "move compute to the data" step: once
+   the dataset is too large to pull onto a single machine, it's cheaper and
+   faster to run training in the cloud, next to the bucket it already lives in.
+   MLflow tracking/registry stays as-is — the EC2 job logs to the same store —
+   so nothing downstream (the batch job, the API) has to change.
 
 Each phase is independently useful and shippable — this isn't an all-or-nothing
 rebuild.
@@ -239,4 +258,6 @@ rebuild.
   scope, not architecture scope.
 - Does not commit to a specific cloud provider or orchestrator (Kubernetes,
   ECS, etc.) — out of scope until there's a reason to need one beyond a single
-  container.
+  container. (Exception: training is planned to move to a dedicated EC2 instance
+  once the data outgrows one machine — see §9 item 9 — since the data already
+  lives in AWS S3. That's a single VM, still not an orchestrator.)

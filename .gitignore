@@ -2,7 +2,11 @@ NBAdata/best_model_SVC.pkl
 NBAdata/data.csv
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # MLflow local tracking + registry backend
 mlflow.db
 mlruns/
+
+# Auto-generated daily chat logs (personal, not part of the project)
+conversations/
