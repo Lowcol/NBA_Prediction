@@ -6,8 +6,10 @@ training set, trains and cross-validates several classifiers, and serves the bes
 model two ways: a nightly **batch** job that predicts a whole slate of games, and
 a real-time **API** (with a small web UI) that predicts a single game on demand.
 
-Data is versioned with DVC (stored in S3), and models are tracked and registered
-with MLflow so the batch job and the API always serve the same `@production` model.
+The model and the current-season stats it needs are committed, so you can run the
+predictor straight after cloning. The bulk training data is versioned with DVC
+(stored in S3), and models are tracked and registered with MLflow so the batch job
+and the API always serve the same `@production` model.
 
 ## How to run
 
@@ -17,18 +19,22 @@ with MLflow so the batch job and the API always serve the same `@production` mod
 pip install -r requirements.txt          # includes dvc[s3]
 ```
 
-### 2. Get the data
+### 2. Get the data (only needed to retrain or run the full test suite)
 
-The training data under `NBAdata/` isn't in git — it's versioned with DVC and
-stored in S3. Pull it (needs AWS credentials for the bucket, via
-`~/.aws/credentials` or the `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars):
+**To just run the API or batch predictions, skip this step.** The trained model
+(`best_model.pkl` / `scaler.pkl`) and the current-season team stats the model reads
+as input (`NBAdata/monthly_stats/`) are committed to git, so serving works straight
+after cloning — no credentials, no download.
+
+The bulk **training** data (historical matchups, `NBAdata/matchups/` + `archive/`)
+is not in git — it's versioned with DVC and stored in S3. You only need it to
+*re-train* the model or to run the data-dependent tests. Pull it (needs AWS
+credentials for the bucket, via `~/.aws/credentials` or the
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars):
 
 ```
-dvc pull                                 # downloads NBAdata/ from S3
+dvc pull                                 # downloads the training data from S3
 ```
-
-The trained model (`best_model.pkl` / `scaler.pkl`) is kept in git, so serving and
-tests work even before a pull.
 
 ### 3. Train the model
 
@@ -88,4 +94,3 @@ Both the batch job and the API can also run in Docker (`docker/Dockerfile.batch`
 - **[documentation/log.md](documentation/log.md)** — dated changelog of major changes.
 - **[documentation/PROGRESS.md](documentation/PROGRESS.md)** — working scratchpad:
   task specs, decisions, and open questions.
-</content>

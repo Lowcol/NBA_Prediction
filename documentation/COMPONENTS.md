@@ -31,29 +31,31 @@ documentation/
   log.md           # Dated changelog of major changes
   PROGRESS.md      # Working scratchpad: task specs, decisions, open questions
 
-NBAdata/                           # (see "Data (DVC + S3)" below — most of this is not in git)
+NBAdata/                           # (see "Data (DVC + S3)" below — the training data is not in git)
   matchups/                        # [DVC] One row per game, per season (2019-20 .. 2024-25)
-  monthly_stats/                   # [DVC] Current-season (2024-25) base/advanced/combined team stats by month
-  archive/historical/monthly_stats/# [DVC] Same, for past seasons (2019-20 .. 2023-24)
+  monthly_stats/                   # [git] Current-season base/advanced/combined team stats — the model's input at prediction time
+  archive/historical/monthly_stats/# [DVC] Past-season monthly stats (2019-20 .. 2023-24), used for training
   predictions/                     # Batch job output, one CSV per predicted slate date
   NBA_Training_Matchups_2019_2025.csv  # [DVC] Combined training set built by decision_tree_training.py
   best_model.pkl, scaler.pkl       # [git] Latest trained model + StandardScaler (kept in git as the batch fallback)
 ```
 
-`[DVC]` paths live in S3, not git — run `dvc pull` after cloning to fetch them (see below). `[git]` paths are committed.
+`[DVC]` paths (the bulk **training** data) live in S3, not git — run `dvc pull` after cloning to fetch them (see below). `[git]` paths are committed, so the model and the current-season stats it needs to *serve* predictions are available straight after cloning.
 
 See `documentation/ARCHITECTURE.md` for the plan behind productionizing this: batch first, then a real-time API, versioning, monitoring, and reliability patterns. `documentation/TRAINING.md` explains, in plain language, how the model is trained and exactly what it learns from. `documentation/log.md` is the dated changelog of major changes, and `documentation/PROGRESS.md` is the working scratchpad — task specs, decisions, and open questions behind those changes.
 
 ## Data (DVC + S3)
 
-The training data under `NBAdata/` (`matchups/`, `monthly_stats/`, `archive/`, and the combined training CSVs) is versioned with [DVC](https://dvc.org/) and stored in S3 (`s3://nba-prediction-dvc-ag`, `us-east-2`), **not** in git. A fresh clone only has the `.dvc` pointer files until you pull:
+The bulk **training** data under `NBAdata/` (`matchups/`, `archive/`, and the combined training CSVs) is versioned with [DVC](https://dvc.org/) and stored in S3 (`s3://nba-prediction-dvc-ag`, `us-east-2`), **not** in git. A fresh clone only has the `.dvc` pointer files for that data until you pull:
 
 ```
 pip install -r requirements.txt          # includes dvc[s3]
-dvc pull                                 # downloads NBAdata/ from S3
+dvc pull                                 # downloads the training data from S3
 ```
 
-`dvc pull` needs AWS credentials for the bucket — configure `~/.aws/credentials` (or the standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars) before running it. `best_model.pkl`/`scaler.pkl` are the exception: they stay in git as the batch job's fallback model, so model-artifact checks work without a pull.
+`dvc pull` needs AWS credentials for the bucket — configure `~/.aws/credentials` (or the standard `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars) before running it.
+
+What is **not** DVC-tracked, and so is available straight after cloning with no credentials: `best_model.pkl`/`scaler.pkl` (the trained model + scaler) and `monthly_stats/` (the current-season team stats the model reads as its input features). Together those are everything the batch job and the API need to *serve* predictions — only *re-training* needs the DVC data pulled. The current-season `monthly_stats/` is a snapshot, though: to keep predictions using up-to-date team form during a season, refresh it with the `data_pull` scripts (see below).
 
 ## MLflow tracking & registry
 
@@ -89,9 +91,8 @@ For a plain-language walkthrough of what the model learns from and how training 
   python serving/batch/run_nightly_predictions.py                  # predicts tomorrow's slate
   python serving/batch/run_nightly_predictions.py --date 2025-04-01 # predicts a specific date (also useful for testing against a past date)
   ```
-- Run via Docker (`docker/Dockerfile.batch`) — the image holds the code only; `NBAdata/` (model, scaler, stats) is mounted at runtime so the container always reads/writes the current data on disk. Run `dvc pull` first so the mounted `NBAdata/` actually has the monthly stats and pkls:
+- Run via Docker (`docker/Dockerfile.batch`) — the image holds the code only; `NBAdata/` (model, scaler, stats) is mounted at runtime so the container always reads/writes the current data on disk. The model and current-season stats are in git, so a fresh clone can build and run without a `dvc pull`:
   ```
-  dvc pull                                  # populate NBAdata/ before mounting it
   docker build -f docker/Dockerfile.batch -t nba-batch:latest .
   docker run --rm -v "$(pwd)/NBAdata:/app/NBAdata" nba-batch:latest --date 2025-04-01
   ```
@@ -102,7 +103,7 @@ For a plain-language walkthrough of what the model learns from and how training 
 - A FastAPI service that predicts a single game on demand. `POST /predict` with `{"home_team": "...", "away_team": "...", "date": "YYYY-MM-DD"}` (date optional, defaults to today) returns the predicted winner and the home team's win probability. It does the same stat lookup and feature-building as the batch job — the shared code lives in `serving/inference/predictor.py` — and loads the `@production` model once at startup (falling back to the local pkls, same as the batch job). `GET /health` reports whether the model loaded and whether the current season's stats are on file.
 - A minimal web UI is served at `/` (`serving/api/static/index.html`): a single self-contained page with two team dropdowns that POSTs to `/predict` and shows the predicted winner and win probability.
 - Error responses: unknown team or no stats on file → 404; stats present but a required feature is missing → 422; the season's stats file isn't provisioned, or the model failed to load → 503.
-- Run locally (needs `NBAdata/` populated — `dvc pull` first for the stats, and the pkls are already in git):
+- Run locally — the model and current-season stats are in git, so this works straight after cloning (no `dvc pull`):
   ```
   uvicorn main:app --app-dir serving/api --reload      # serves on http://localhost:8000
   ```
@@ -112,16 +113,15 @@ For a plain-language walkthrough of what the model learns from and how training 
     -H "Content-Type: application/json" \
     -d '{"home_team": "Denver Nuggets", "away_team": "Miami Heat", "date": "2025-04-01"}'
   ```
-- Run via Docker (`docker/Dockerfile.api`) — same mount pattern as the batch image:
+- Run via Docker (`docker/Dockerfile.api`) — same mount pattern as the batch image, and likewise no `dvc pull` needed to serve:
   ```
-  dvc pull                                  # populate NBAdata/ before mounting it
   docker build -f docker/Dockerfile.api -t nba-api:latest .
   docker run --rm -p 8000:8000 -v "$(pwd)/NBAdata:/app/NBAdata" nba-api:latest
   ```
 
 ## Testing
 
-`tests/` covers the pure-logic pieces of the pipeline (feature resolution, season/date parsing, stats lookup and fallback, home/away parsing, the registry→pkl model-loading fallback) and the real-time API (`/health` and `/predict` happy path + error branches, with the model and stats mocked so the tests stay offline), plus a few regression guards for bugs that have bitten this project before — most notably that every combined monthly-stats file's `Season` column actually matches its filename, and that the full training set uses all 6 seasons instead of silently dropping five of them. The model-artifact and pure-logic tests run offline against the git-tracked `best_model.pkl`/`scaler.pkl`, but the data-dependent tests read `NBAdata/matchups/` and `monthly_stats/`, which are DVC-tracked — run `dvc pull` first (needs AWS creds) or those tests will fail on a fresh clone.
+`tests/` covers the pure-logic pieces of the pipeline (feature resolution, season/date parsing, stats lookup and fallback, home/away parsing, the registry→pkl model-loading fallback) and the real-time API (`/health` and `/predict` happy path + error branches, with the model and stats mocked so the tests stay offline), plus a few regression guards for bugs that have bitten this project before — most notably that every combined monthly-stats file's `Season` column actually matches its filename, and that the full training set uses all 6 seasons instead of silently dropping five of them. The model-artifact and pure-logic tests run offline against the git-tracked `best_model.pkl`/`scaler.pkl` and `monthly_stats/`, but the data-dependent tests also read `NBAdata/matchups/`, which is DVC-tracked — run `dvc pull` first (needs AWS creds) or those tests will fail on a fresh clone.
 
 What's deliberately **not** covered here: `scripts/data_pull/*` and the batch job's live schedule fetch. Both need `stats.nba.com`, which blocks cloud/datacenter IPs — exactly what CI runners are (see the network note above). Those stay manual/local-only.
 
@@ -146,5 +146,3 @@ Team stats are joined to each matchup at **month granularity** (`merge_advanced_
 ### Monthly stats mislabeled by season (fixed, 2026-07-16)
 
 `merge_advanced_base_stats.py` hardcoded `season = "2019-20"` when building its output, regardless of which season's base/advanced files it was actually merging. Every `nba_team_combined_stats_*.csv` file — current and archived, all 6 seasons — ended up with its internal `Season` column stuck at `"2019-20"`. Since `decision_tree_training.py` joins matchups to stats on `["Team", "Season", "Month"]`, only the true 2019-20 matchups ever found a match; the other 5 seasons' rows were silently dropped by `dropna`, meaning the model was training on ~976 rows instead of the ~7,600 the pipeline was supposed to produce. The script now derives `season` from the loaded data itself and regenerates every season's combined-stats file; all 6 seasons now correctly contribute rows.
-</content>
-</invoke>

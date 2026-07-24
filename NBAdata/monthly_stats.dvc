@@ -1,6 +1,0 @@
-outs:
-- md5: aef0d7548088a1f9fa00913234797c3e.dir
-  size: 573553
-  nfiles: 6
-  hash: md5
-  path: monthly_stats
