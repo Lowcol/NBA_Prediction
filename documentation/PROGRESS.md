@@ -7,6 +7,53 @@ behind it. Read this first when resuming work after a context gap.
 
 ---
 
+## Web UI + probability bug + hyperparameter tuning (out-of-band, 2026-07-24)
+
+**Status: code + tests done; NOT retrained yet — the tuning + probability fixes only take effect when the user re-runs training (which also re-promotes `@production`). Nothing committed.**
+
+### Web UI (user request: "simple interface, choose 2 teams, get prediction")
+- `serving/api/static/index.html` — single self-contained page (inline CSS/JS, no deps), two dropdowns with the 30 NBA teams hardcoded (user's choice over a `/teams` endpoint), POSTs `/predict` same-origin (no CORS needed). No date field (user's choice) — API defaults to today.
+- `serving/api/main.py` — `GET /` serves the page via `FileResponse`. No `StaticFiles` mount needed for one file. Dockerfile untouched (`COPY serving/` already ships it).
+- **Season fallback (user's choice among 3 options):** the UI's date-less request maps today (off-season 2026) to season `2026_27`, which has no stats file → every request 503'd. `/predict` now falls back to the latest season on file (`max()` on keys like `"2024_25"`) when the target season is missing; 503 only when *nothing* is provisioned. Caveat flagged to user: response echoes the requested date even when stats come from an older season. Tests updated (mocks now need the season present in `collect_monthly_files`) + 2 new tests (fallback picks latest; empty store → 503).
+
+### Probability bug: "everything is 100%"
+- User noticed most matchups predicted at 100%. Root cause: production model is `BaggingClassifier(estimator=SVC(gamma="scale"))` — base SVC **without** `probability=True`, so `predict_proba` degrades to counting the 10 SVMs' hard votes (all values multiples of 0.1, piling at 0/1; verified empirically: 28 of 56 test matchups at exactly 1.0). The standalone SVC on the line above *had* the flag; the bagged one didn't.
+- Fix: `probability=True` on the bagged base SVC (user chose "fix code only, I'll retrain"). Doesn't change predictions/accuracy — only makes probabilities real (Platt-scaled, averaged).
+
+### Model training visibility (user asked for "TensorBoard")
+- Pushed back: models are sklearn (one-shot fits, no epoch curves) and MLflow tracking already exists — TensorFlow would be a heavy dep for bar charts. User accepted MLflow UI instead: `mlflow ui --backend-store-uri sqlite:///mlflow.db` → :5000.
+- Gotcha for next time: the 6 model runs are **nested** under the `training-run` parent — the UI collapses them (user thought only Bagging SVC was logged; all 6 were there behind the ▸ expander; Models tab shows only the registered winner).
+
+### Hyperparameter tuning (user request, after "why did SVC beat XGBoost" → answer: it didn't meaningfully — 0.7pt gap vs ±1-1.7pt fold noise, all models ~0.60 vs 0.554 home-court baseline, none tuned)
+- `decision_tree_training.py`: `cross_val_score` → `GridSearchCV` (5-fold, accuracy, `n_jobs=-1`, `refit=False` since the winner is refit once at the end). New module-level `build_model_grids()` (testable) — small grids per model (4-18 candidates, 46 total), each containing the former hand-picked config so tuning can only match-or-beat.
+- **SVC probability trick:** grids tune with `probability=False` (accuracy uses `predict`, unaffected; `probability=True` adds internal 5-fold calibration ≈5x cost per fit). `PROBABILITY_OVERRIDES` applies `probability=True` / `estimator__probability=True` to the winner only, before its single final fit. This preserves the probability bugfix above.
+- MLflow per-model runs now log `best_<param>` + `n_grid_candidates` instead of full `get_params()`.
+
+### Verification performed
+- Smoke test (scratchpad): all 6 grids fit on tiny synthetic data (validates grid param names, incl. `estimator__` prefixes) + both overrides apply cleanly.
+- Full suite: 44 passed. UI verified via TestClient (200, HTML served) + real end-to-end predict after `dvc pull` (date-less request now 200 via fallback; unknown team still 404).
+
+### Retrain done (same day) — new winner XGBoost, plus a registration bug fixed
+- First retrain crashed at `mlflow.sklearn.log_model`: MLflow 3.x serializes sklearn models via **skops**, which trust-lists sklearn types only. Tuning changed the winner to **XGBoost** (first non-pure-sklearn winner), whose `XGBClassifier`/`Booster` types got refused at the save audit. Latent bug — only fires when a non-sklearn model wins the bake-off.
+- Fix: `skops_trusted_types=["xgboost.core.Booster", "xgboost.sklearn.XGBClassifier"]` on `log_model`. Verified in MLflow source that the list is stored in the flavor config and reused by `load_model` automatically → serving needed no change.
+- Rerun succeeded: **XGBoost wins (CV 0.6079, test 0.6073)** with tuned `{lr 0.1, max_depth 3, n_estimators 100}` — shallower than the old hand-picked depth-6. Old winner Bagging SVC unchanged at 0.6070 (its grid re-picked the former hand-set config). Registered **v2**, `@production` re-aliased; pkls overwritten.
+- Verified end-to-end: API loads v2 from registry, probabilities now realistic (e.g. 0.615/0.583/0.686/0.208 vs the old vote-count 0/1) — XGBoost has native `predict_proba`, so the SVC probability override wasn't even needed this time. Full suite 44 passed.
+
+### Pulled 2025-26 season + retrained on 7 seasons (same day)
+- **API reachability:** plain `nba_api` to stats.nba.com times out from this env (datacenter-IP block, as README documents). The repo's `nbaPull_19-25_matchups.py` has a working **TLS bypass** (`curl_cffi` Chrome-120 impersonation + `nba.com/stats` Akamai cookie warmup, then `NBAStatsHTTP.get_session` override). Reusing that bypass, the API **is** reachable — so the pull ran here, not just locally.
+- **Pull:** one-off scratchpad script (`scratchpad/pull_2025_26.py`, not committed) mirroring the existing pull format exactly: `LeagueDashTeamStats` Base + Advanced (PerGame, all 4 season types, months 1-12) → `nba_team_{base,advanced}_stats_2025_26.csv`; `LeagueGameFinder` → `NBA_2025_26_Matchups.csv`. Sanity: **1230 regular-season games = 30×82/2 exactly**, 282 monthly rows each measure.
+- **Merge:** called the repo's own `merge_season()` for 2025-26 → `nba_team_combined_stats_2025_26.csv`. Byte-structure identical to 2024-25 (270 rows, 103 cols, same columns); all 6 model stats resolve; 30 teams have month-4 rows. Existing merge `main()` still hardcodes 2024_25 only — didn't touch it; `collect_monthly_files()` globs the dir so the new file is picked up regardless.
+- **Retrain (v3):** all 7 seasons load (2025_26 = 1321 rows, ~8916 total). New winner **Random Forest** (CV 0.6111, test 0.5999), tuned `{max_depth 10, min_samples_leaf 10}`. Note winner has now been Bagging SVC (v1-ish) → XGBoost (v2) → Random Forest (v3) across retrains — all within noise, consistent with the ~0.60 information ceiling. Registered v3, `@production` re-aliased.
+- **Verified:** API loads v3; realistic probs (0.593 / 0.810 / 0.566). `stats_available: False` in /health is correct — today (Jul 2026) maps to season 2026-27 which hasn't been played; predict falls back to the newest season on file, now 2025-26 (was 2024-25). 44 tests pass. `documentation/TRAINING.md` (new this session, explains process + the 13 features) updated to 7 seasons / RF winner.
+
+### Open / waiting on user
+- **New 2025-26 data not yet persisted to the DVC remote.** `dvc status` shows `matchups`, `monthly_stats`, and the combined training CSV modified. Needs `dvc add`/`dvc commit` + `dvc push` (S3), then git-commit the updated `.dvc` pointers + `best_model.pkl`/`scaler.pkl` (v3). Not done — pushing to S3 is an outward action, gated on user say-so.
+- Whether to add a committed, season-parameterized pull script (the scratchpad one is throwaway) so next season is one command.
+- Whether to flatten MLflow nested runs to top-level (offered, not decided).
+- Nothing committed yet — waiting on explicit "commit this."
+
+---
+
 ## Phase 4 — real-time FastAPI API (`ARCHITECTURE.md`), built ahead of phase 3
 
 **Status: code + tests done, docs updated; not committed yet — waiting on explicit "commit this."**

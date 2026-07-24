@@ -7,10 +7,11 @@ import mlflow.sklearn
 import pandas as pd
 from mlflow import MlflowClient
 from mlflow.models import infer_signature
+from sklearn.base import clone
 from sklearn.ensemble import BaggingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.model_selection import GridSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
@@ -150,6 +151,57 @@ def build_historical_training_dataset() -> pd.DataFrame:
     return dataset
 
 
+def build_model_grids() -> dict[str, tuple]:
+    """Each model paired with a small hyperparameter grid for GridSearchCV.
+
+    Grids are deliberately small: ~6k rows of noisy data can't support fine-grained
+    tuning, and SVC-based fits are expensive. The former hand-picked settings are
+    all included in their model's grid, so tuning can only match or beat them.
+    """
+    return {
+        "Logistic Regression": (
+            LogisticRegression(max_iter=1000),
+            {"C": [0.01, 0.1, 1, 10]},
+        ),
+        "Decision Tree": (
+            DecisionTreeClassifier(random_state=42),
+            {"max_depth": [3, 5, 8], "min_samples_leaf": [1, 20, 50]},
+        ),
+        "Random Forest": (
+            RandomForestClassifier(n_estimators=100, random_state=42),
+            {"max_depth": [5, 10, None], "min_samples_leaf": [1, 10]},
+        ),
+        "XGBoost": (
+            XGBClassifier(random_state=42, eval_metric="logloss"),
+            {
+                "n_estimators": [100, 300],
+                "learning_rate": [0.03, 0.1],
+                "max_depth": [2, 3, 6],
+            },
+        ),
+        "SVC (RBF Kernel)": (
+            SVC(class_weight="balanced"),
+            {"C": [0.1, 1, 10], "gamma": ["scale", 0.01, 0.1]},
+        ),
+        "Bagging SVC": (
+            BaggingClassifier(estimator=SVC(), n_estimators=10, random_state=0),
+            {"estimator__C": [0.1, 1, 10], "estimator__gamma": ["scale", 0.1]},
+        ),
+    }
+
+
+# The SVC-based models are tuned with probability=False: accuracy scoring only uses
+# predict(), which calibration doesn't change, while probability=True adds an internal
+# 5-fold calibration to every grid fit (~5x cost). The winning params are refit with
+# probability=True below so serving gets real predict_proba output (without it,
+# BaggingClassifier.predict_proba degrades to counting the 10 models' hard votes ->
+# near-0/1 "probabilities").
+PROBABILITY_OVERRIDES = {
+    "SVC (RBF Kernel)": {"probability": True},
+    "Bagging SVC": {"estimator__probability": True},
+}
+
+
 def main() -> None:
     df = build_historical_training_dataset()
     target = "Team1Win"
@@ -182,20 +234,7 @@ def main() -> None:
     print(f"Majority-class baseline accuracy: {majority_baseline:.4f}")
     print(f"Home-team-always-wins baseline accuracy: {home_baseline:.4f}")
 
-    models = {
-        "Logistic Regression": LogisticRegression(max_iter=1000),
-        "Decision Tree": DecisionTreeClassifier(max_depth=5),
-        "Random Forest": RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42),
-        "XGBoost": XGBClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=6,
-            random_state=42,
-            eval_metric="logloss",
-        ),
-        "SVC (RBF Kernel)": SVC(gamma="scale", probability=True, class_weight="balanced"),
-        "Bagging SVC": BaggingClassifier(estimator=SVC(gamma="scale"), n_estimators=10, random_state=0),
-    }
+    models = build_model_grids()
 
     mlflow.set_tracking_uri(tracking_uri())
     mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
@@ -211,22 +250,35 @@ def main() -> None:
         mlflow.log_metric("majority_baseline_accuracy", majority_baseline)
         mlflow.log_metric("home_court_baseline_accuracy", home_baseline)
 
-        for name, model in models.items():
+        for name, (estimator, param_grid) in models.items():
             with mlflow.start_run(run_name=name, nested=True):
-                cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=5, scoring="accuracy")
-                print(f"{name} CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+                # refit=False: we only need the scores/params here; the winning
+                # config is refit once below (with the probability override).
+                search = GridSearchCV(
+                    estimator, param_grid, cv=5, scoring="accuracy", n_jobs=-1, refit=False
+                )
+                search.fit(X_train_scaled, y_train)
+                cv_mean = search.best_score_
+                cv_std = search.cv_results_["std_test_score"][search.best_index_]
+                print(
+                    f"{name} best CV Accuracy: {cv_mean:.4f} (+/- {cv_std:.4f}) "
+                    f"with {search.best_params_}"
+                )
                 mlflow.log_param("model_type", name)
-                mlflow.log_params(model.get_params())
-                mlflow.log_metric("cv_accuracy_mean", cv_scores.mean())
-                mlflow.log_metric("cv_accuracy_std", cv_scores.std())
-            if cv_scores.mean() > best_cv_score:
-                best_cv_score = cv_scores.mean()
+                mlflow.log_param("n_grid_candidates", len(search.cv_results_["params"]))
+                mlflow.log_params({f"best_{k}": v for k, v in search.best_params_.items()})
+                mlflow.log_metric("cv_accuracy_mean", cv_mean)
+                mlflow.log_metric("cv_accuracy_std", cv_std)
+            if cv_mean > best_cv_score:
+                best_cv_score = cv_mean
                 best_model_name = name
-                best_model = model
+                best_model = clone(estimator).set_params(**search.best_params_)
 
         if best_model is None:
             raise RuntimeError("No model was trained successfully.")
 
+        if best_model_name in PROBABILITY_OVERRIDES:
+            best_model.set_params(**PROBABILITY_OVERRIDES[best_model_name])
         best_model.fit(X_train_scaled, y_train)
         test_preds = best_model.predict(X_test_scaled)
         test_acc = accuracy_score(y_test, test_preds)
@@ -254,6 +306,11 @@ def main() -> None:
             signature=signature,
             input_example=X_test.iloc[:2],
             registered_model_name=REGISTERED_MODEL_NAME,
+            # MLflow's skops serialization only trusts sklearn types by default; when
+            # XGBoost wins the bake-off, its classes must be trust-listed or the save is
+            # refused. Safe here (we just trained this model ourselves), and the list is
+            # stored in the model's flavor config so load_model reuses it automatically.
+            skops_trusted_types=["xgboost.core.Booster", "xgboost.sklearn.XGBClassifier"],
         )
 
         MlflowClient().set_registered_model_alias(

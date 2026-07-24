@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NBA win predictor</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.4rem; }
+    .row { display: flex; gap: 1rem; margin: 1rem 0; }
+    .field { flex: 1; }
+    label { display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem; }
+    select { width: 100%; padding: 0.5rem; font-size: 1rem; }
+    button { padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; }
+    button:disabled { cursor: default; opacity: 0.6; }
+    #result { margin-top: 1.5rem; font-size: 1.05rem; min-height: 1.5rem; }
+    #result.error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>NBA win predictor</h1>
+  <p>Pick two teams and predict the winner (using today's latest team stats).</p>
+
+  <div class="row">
+    <div class="field">
+      <label for="home">Home team</label>
+      <select id="home"></select>
+    </div>
+    <div class="field">
+      <label for="away">Away team</label>
+      <select id="away"></select>
+    </div>
+  </div>
+
+  <button id="predict">Predict</button>
+  <div id="result"></div>
+
+  <script>
+    const TEAMS = [
+      "Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets",
+      "Chicago Bulls", "Cleveland Cavaliers", "Dallas Mavericks", "Denver Nuggets",
+      "Detroit Pistons", "Golden State Warriors", "Houston Rockets", "Indiana Pacers",
+      "LA Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat",
+      "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans",
+      "New York Knicks", "Oklahoma City Thunder", "Orlando Magic",
+      "Philadelphia 76ers", "Phoenix Suns", "Portland Trail Blazers",
+      "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors", "Utah Jazz",
+      "Washington Wizards"
+    ];
+
+    const homeSel = document.getElementById("home");
+    const awaySel = document.getElementById("away");
+    const button = document.getElementById("predict");
+    const result = document.getElementById("result");
+
+    for (const team of TEAMS) {
+      homeSel.add(new Option(team, team));
+      awaySel.add(new Option(team, team));
+    }
+    awaySel.selectedIndex = 1; // default to two different teams
+
+    const titleCase = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
+
+    function show(message, isError) {
+      result.textContent = message;
+      result.className = isError ? "error" : "";
+    }
+
+    async function predict() {
+      const home_team = homeSel.value;
+      const away_team = awaySel.value;
+      if (home_team === away_team) {
+        show("Please pick two different teams.", true);
+        return;
+      }
+
+      button.disabled = true;
+      show("Predicting…", false);
+      try {
+        const resp = await fetch("/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ home_team, away_team }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          show(data.detail || "Prediction failed.", true);
+          return;
+        }
+        const winner = titleCase(data.predicted_winner);
+        const prob = data.home_win_probability;
+        const probText = prob === null
+          ? "home win probability unavailable"
+          : `home win probability ${Math.round(prob * 100)}%`;
+        show(`Predicted winner: ${winner} — ${probText}`, false);
+      } catch (err) {
+        show("Could not reach the prediction service.", true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    button.addEventListener("click", predict);
+  </script>
+</body>
+</html>

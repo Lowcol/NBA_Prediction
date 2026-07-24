@@ -12,8 +12,10 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "modeling"))
 sys.path.insert(0, str(PROJECT_ROOT / "serving" / "inference"))
 
@@ -46,6 +48,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="NBA win predictor", lifespan=lifespan)
 
 
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
 @app.get("/health")
 def health() -> dict:
     model_loaded = getattr(app.state, "predictor", None) is not None
@@ -63,6 +70,19 @@ def predict(req: PredictRequest) -> PredictResponse:
     away = req.away_team.strip().lower()
     target = req.date or date.today()
     season_key = season_label_for_date(target).replace("-", "_")
+
+    # If the target date's season has no stats file (e.g. the current season isn't
+    # provisioned yet), fall back to the most recent season on file so the UI's
+    # date-less "just pick two teams" request still returns a prediction.
+    available = collect_monthly_files()
+    if season_key not in available:
+        if not available:
+            raise HTTPException(
+                status_code=503,
+                detail="No monthly stats files are provisioned. Run the data_pull + "
+                "merge_advanced_base_stats.py scripts (or `dvc pull`) first.",
+            )
+        season_key = max(available)  # keys look like "2024_25"; max() is the latest season
 
     try:
         stats_df = load_team_stats(season_key)
