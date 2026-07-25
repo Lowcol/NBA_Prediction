@@ -113,11 +113,12 @@ For a plain-language walkthrough of what the model learns from and how training 
     -H "Content-Type: application/json" \
     -d '{"home_team": "Denver Nuggets", "away_team": "Miami Heat", "date": "2025-04-01"}'
   ```
-- Run via Docker (`docker/Dockerfile.api`) — same mount pattern as the batch image, and likewise no `dvc pull` needed to serve:
+- Run via Docker (`docker/Dockerfile.api`) — unlike the batch image, this one is **self-contained**: it bakes in the trained model + current-season stats (both git-tracked), so no volume mount and no `dvc pull` are needed to serve:
   ```
   docker build -f docker/Dockerfile.api -t nba-api:latest .
-  docker run --rm -p 8000:8000 -v "$(pwd)/NBAdata:/app/NBAdata" nba-api:latest
+  docker run --rm -p 8000:8000 nba-api:latest        # then open http://localhost:8000
   ```
+  The baked-in stats are a snapshot from build time. To serve fresher stats without rebuilding, mount an updated `NBAdata/` over the image's copy: `docker run --rm -p 8000:8000 -v "$(pwd)/NBAdata:/app/NBAdata" nba-api:latest`.
 
 ## Testing
 

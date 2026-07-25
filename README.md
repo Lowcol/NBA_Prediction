@@ -13,6 +13,30 @@ and the API always serve the same `@production` model.
 
 ## How to run
 
+There are two ways to run this, depending on what you want:
+
+- **[Easy — just the prediction page (Docker)](#easy-setup-just-the-prediction-page-docker)** — one build, one run, open the browser. Best if you just want to use the predictor.
+- **[Full — everything locally (Python)](#full-setup-run-everything-locally-python)** — install deps and run the pieces directly. Needed to re-train the model, run the batch job, or run the tests.
+
+---
+
+## Easy setup: just the prediction page (Docker)
+
+The quickest way to get the prediction web page running.
+
+```
+docker build -f docker/Dockerfile.api -t nba-api:latest .
+docker run --rm -p 8000:8000 nba-api:latest
+```
+
+Then open [http://localhost:8000](http://localhost:8000), pick two teams, and get a prediction.
+
+---
+
+## Full setup: run everything locally (Your going to need AWS cred)
+
+Use this if you want to re-train the model, run the batch job, or run the tests.
+
 ### 1. Install dependencies
 
 ```
@@ -28,7 +52,7 @@ after cloning — no credentials, no download.
 
 The bulk **training** data (historical matchups, `NBAdata/matchups/` + `archive/`)
 is not in git — it's versioned with DVC and stored in S3. You only need it to
-*re-train* the model or to run the data-dependent tests. Pull it (needs AWS
+_re-train_ the model or to run the data-dependent tests. Pull it (needs AWS
 credentials for the bucket, via `~/.aws/credentials` or the
 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars):
 
@@ -60,7 +84,7 @@ Output is written to `NBAdata/predictions/predictions_<date>.csv`.
 uvicorn main:app --app-dir serving/api --reload      # serves on http://localhost:8000
 ```
 
-Open <http://localhost:8000> for the web UI (pick two teams, get a prediction), or
+Open [http://localhost:8000](http://localhost:8000) for the web UI (pick two teams, get a prediction), or
 call the API directly:
 
 ```
@@ -72,6 +96,24 @@ curl -X POST http://localhost:8000/predict \
 `GET /health` reports whether the model loaded and whether the current season's
 stats are on file.
 
+### Run the web UI with Docker (no Python setup)
+
+The quickest way to get the prediction page running. The API image is
+**self-contained** — it bundles the trained model and the current-season stats —
+so all you need is Docker. Build it once, then run:
+
+```
+docker build -f docker/Dockerfile.api -t nba-api:latest .
+docker run --rm -p 8000:8000 nba-api:latest
+```
+
+Then open [http://localhost:8000](http://localhost:8000), pick two teams, and get a prediction. No
+`pip install`, no `dvc pull`, no credentials, no volume mounts. Stop it with
+`Ctrl+C`.
+
+(If a prebuilt image is ever published to a registry, `docker pull <image>`
+replaces the `docker build` step — the `docker run` line is the same.)
+
 ### Run the tests
 
 ```
@@ -79,8 +121,8 @@ dvc pull                        # fetch DVC-tracked data (needs AWS creds); skip
 python -m pytest
 ```
 
-Both the batch job and the API can also run in Docker (`docker/Dockerfile.batch`,
-`docker/Dockerfile.api`) — see the components doc below.
+The batch job can also run in Docker (`docker/Dockerfile.batch`) — see the
+components doc below.
 
 ## Learn more
 
