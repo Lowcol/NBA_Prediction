@@ -35,7 +35,7 @@ DATA_ROOT = PROJECT_ROOT / "NBAdata"
 ROLLING_DIR = DATA_ROOT / "rolling_stats"
 
 STAT_COLS = [
-    "W_PCT", "PIE", "EFG_PCT", "TM_TOV_PCT", "OREB_PCT", "FT_PCT",
+    "W_PCT", "PIE", "EFG_PCT", "TM_TOV_PCT", "OREB_PCT", "FTR",
     "NET_RATING", "OFF_RATING", "DEF_RATING", "PACE",
 ]
 

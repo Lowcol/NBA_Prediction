@@ -24,7 +24,8 @@ def _make_log(n_games, team="denver nuggets", season_type="Regular Season", star
         "EFG_PCT": [200.0 + i for i in range(n_games)],
         "TM_TOV_PCT": [300.0 + i for i in range(n_games)],
         "OREB_PCT": [400.0 + i for i in range(n_games)],
-        "FT_PCT": [500.0 + i for i in range(n_games)],
+        "FGA": [80.0] * n_games,
+        "FTA": [20.0 + i for i in range(n_games)],
         "NET_RATING": [600.0 + i for i in range(n_games)],
         "OFF_RATING": [700.0 + i for i in range(n_games)],
         "DEF_RATING": [800.0 + i for i in range(n_games)],
@@ -129,7 +130,7 @@ def test_output_columns_match_features_stat_map_expectations():
 
     expected_cols = {
         "TEAM_NAME", "GAME_ID", "GAME_DATE", "Season", "games_in_window",
-        "W_PCT", "PIE", "EFG_PCT", "TM_TOV_PCT", "OREB_PCT", "FT_PCT",
+        "W_PCT", "PIE", "EFG_PCT", "TM_TOV_PCT", "OREB_PCT", "FTR",
         "NET_RATING", "OFF_RATING", "DEF_RATING", "PACE",
     }
     assert set(result.columns) == expected_cols

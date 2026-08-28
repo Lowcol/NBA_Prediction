@@ -60,7 +60,7 @@ def make_stats_df(include_all_stats: bool = True) -> pd.DataFrame:
         "PACE": [99.2, 101.8],
     }
     if include_all_stats:
-        row["FT_PCT"] = [0.20, 0.18]  # source column for the FTR feature
+        row["FTR"] = [0.20, 0.18]  # source column for the FTR feature (true FTA/FGA)
     return pd.DataFrame(row)
 
 
@@ -101,7 +101,7 @@ def test_predict_unknown_team_returns_404(client):
 
 
 def test_predict_missing_features_returns_422(monkeypatch):
-    # Stats file is missing the FT_PCT column -> the FTR feature can't be built.
+    # Stats file is missing the FTR column -> the FTR feature can't be built.
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df(include_all_stats=False))
     monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)

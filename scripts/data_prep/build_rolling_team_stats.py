@@ -22,6 +22,13 @@ as a column at all -- it's derived here from WL ('W' -> 1, 'L' -> 0) as a
 trailing win rate over the rolling window. This is a change in meaning from
 the old monthly_stats pipeline's W_PCT, which was season-cumulative win
 percentage. Same column name, different semantics -- intentional.
+
+Note on FTR: also derived, not a source column. FTR is free-throw RATE
+(FTA/FGA -- how often a team gets to the line), one of basketball's "Four
+Factors". The old monthly_stats pipeline sourced FTR from FT_PCT (free-throw
+shooting PERCENTAGE, i.e. FTM/FTA) instead, which measures something
+different -- a known approximation, not a bug introduced here. Fixed as of
+this rolling-window rebuild since FTA/FGA are already in the per-game data.
 """
 
 from pathlib import Path
@@ -37,13 +44,14 @@ ROLLING_WINDOW = 10
 MIN_GAMES_IN_WINDOW = 3
 INCLUDE_PRESEASON_IN_WINDOW = False
 
-# model-facing rolling stat name -> source column in team_game_logs_<season>.csv
+# model-facing rolling stat name -> column in `working` to roll (source column
+# in team_game_logs_<season>.csv, except FTR which is derived -- see docstring)
 ROLLING_STAT_SOURCE = {
     "PIE": "PIE",
     "EFG_PCT": "EFG_PCT",
     "TM_TOV_PCT": "TM_TOV_PCT",
     "OREB_PCT": "OREB_PCT",
-    "FT_PCT": "FT_PCT",
+    "FTR": "FTR",
     "NET_RATING": "NET_RATING",
     "OFF_RATING": "OFF_RATING",
     "DEF_RATING": "DEF_RATING",
@@ -65,6 +73,7 @@ def compute_rolling_stats(df: pd.DataFrame) -> pd.DataFrame:
     working = df.copy()
     working["GAME_DATE"] = pd.to_datetime(working["GAME_DATE"])
     working["W_PCT"] = (working["WL"] == "W").astype(float)
+    working["FTR"] = working["FTA"] / working["FGA"]
 
     # History used to build windows excludes Pre Season (if configured), but
     # the *output* rows are still restricted to non-Pre-Season games below --

@@ -91,7 +91,7 @@ month-to-date averages.
 | `eFG%`       | **Effective field-goal %** — shooting accuracy that gives extra credit for 3-pointers being worth more.                                                             | `EFG_PCT`     |
 | `TOV%`       | **Turnover %** — how often possessions are lost to turnovers (lower is better).                                                                                     | `TM_TOV_PCT`  |
 | `ORB%`       | **Offensive rebound %** — share of available offensive rebounds grabbed (second chances).                                                                           | `OREB_PCT`    |
-| `FTR`        | **Free-throw factor** — how much the team gets to (and converts) the free-throw line.                                                                               | `FT_PCT`      |
+| `FTR`        | **Free-throw rate** — how often the team gets to the free-throw line, relative to its shot attempts (`FTA / FGA`).                                                  | `FTR`         |
 | `NetRtg`     | **Net rating** — points scored minus points allowed, per 100 possessions. The single "are they outscoring opponents, pace-adjusted" number.                        | `NET_RATING`  |
 | `OffRtg`     | **Offensive rating** — points scored per 100 possessions.                                                                                                           | `OFF_RATING`  |
 | `DefRtg`     | **Defensive rating** — points allowed per 100 possessions (lower is better).                                                                                        | `DEF_RATING`  |
@@ -115,11 +115,17 @@ for whether this actually helped.
 > between stat files (e.g. `W_PCT` vs `W_PCT_base`). `resolve_stat_columns()` in
 > `features.py` maps each model-facing name to whichever column actually exists
 > in a given file, so the contract stays stable even if the raw data's column
-> names differ. `FTR` is still sourced from the `FT_PCT` column (a known
-> approximation, not true free-throw rate `FTA/FGA`) — the rolling-window
-> rebuild pulls raw `FTA`/`FGA` per game already, so fixing this is now cheap,
-> but it's a deliberately separate, not-yet-done change (see "How to improve
-> accuracy") so any future accuracy shift can be attributed to it specifically.
+> names differ.
+>
+> **`FTR` fixed on 2026-08-28.** Previously sourced from `FT_PCT`
+> (free-throw shooting *percentage*, `FTM/FTA`) as an approximation. Now
+> computed as true free-throw *rate*, `FTA/FGA` (how often the team gets to
+> the line at all, per shot attempt) — a genuinely different stat, one of
+> basketball's actual "Four Factors." Computed per game in
+> `build_rolling_team_stats.py` from the raw `FTA`/`FGA` columns (already
+> pulled per-game for the rolling-window rebuild), then rolled the same way
+> as the other 9 stats. Done as its own isolated retrain, right after the
+> rolling-window rebuild landed — see §5 for the result.
 
 ### The 1 game-context feature
 
@@ -245,6 +251,16 @@ Historically (month-to-date averages) the trained models landed around
 > much into from one run; per §6, the models have always clustered tightly
 > enough that the specific winner isn't very meaningful on its own.
 >
+> **2026-08-28 — FTR fix (isolated retrain, right after the above).** Fixing
+> `FTR` to be true `FTA/FGA` instead of the `FT_PCT` proxy (§3) moved the
+> winner to **SVC-RBF (0.628 cross-val / 0.626 test)** — cross-val ticked up
+> from 0.625 to 0.628, test ticked *down* from 0.631 to 0.626, both inside
+> the noise band. Net effect: another wash, like the `NetRtg`/`Pace`
+> addition, not like the rolling-window rebuild. Worth doing anyway — it's a
+> real correctness fix (the old proxy measured something different from what
+> the feature name claimed), and correctness fixes don't need to pay for
+> themselves in accuracy — but don't expect it to move the number.
+>
 > Before this: all six models clustered near 0.60 — a sign of an information
 > ceiling in the *features*, not a weakness of any one algorithm. That
 > reasoning is what motivated the rebuild; see §6.
@@ -308,11 +324,10 @@ Real games turn on other things the current 10 stats still miss:
   couple of games each season rather than averaging over too little history —
   but this is a hard cutoff, not the down-weighting this lever originally
   suggested.
-- **Fix `FTR` to be true free-throw rate.** Currently sourced from `FT_PCT`
-  (see §3's callout), not `FTA/FGA`. Cheap now that raw `FTA`/`FGA` are
-  pulled per-game anyway (`NBAdata/team_game_logs/`) — deliberately not done
-  yet, so a future retrain's accuracy change can be attributed to this
-  specifically, not conflated with the rolling-window rebuild.
+- ✅ **Done (2026-08-28): fix `FTR` to be true free-throw rate.** Was sourced
+  from `FT_PCT` (see §3); now `FTA/FGA`. Done as its own isolated retrain —
+  see §5. Result: a wash (inside the noise band), same as `NetRtg`/`Pace`
+  earlier. Worth having anyway as a correctness fix, just not an accuracy one.
 
 ### Lever 4 — Model-side tweaks (smaller payoff, since the models already tie)
 

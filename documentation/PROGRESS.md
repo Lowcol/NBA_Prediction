@@ -7,6 +7,52 @@ behind it. Read this first when resuming work after a context gap.
 
 ---
 
+## FTR fix: true free-throw rate instead of the FT_PCT proxy (2026-08-28)
+
+**Status: done, verified, committed directly (user asked to "do the FTR
+issue" right after Part B shipped).**
+
+The Part B rolling-window rebuild flagged but deliberately deferred this:
+`FTR` was sourced from `FT_PCT` (free-throw shooting % — makes/attempts),
+not true free-throw *rate* (`FTA/FGA` — how often a team gets to the line
+per shot attempt). Kept separate at the time so the rolling-window
+rebuild's accuracy change wouldn't be conflated with a simultaneous stat
+redefinition.
+
+**What changed:** `build_rolling_team_stats.py` now computes
+`working["FTR"] = working["FTA"] / working["FGA"]` per game (both already
+in the pulled per-game data), rolls it through the same trailing-10-game
+mechanism as everything else, and `ROLLING_STAT_SOURCE`'s `"FT_PCT"` entry
+became `"FTR"`. `features.py`'s `STAT_MAP["FTR"]` changed from `["FT_PCT"]`
+to `["FTR"]` — no fallback kept, since this is an internal pipeline whose
+only data source is being regenerated anyway (no external files with the
+old schema to stay compatible with). `build_current_rolling_snapshot.py`'s
+`STAT_COLS` updated to match. Five test files touched to swap fixture
+columns from `FT_PCT` to `FTR`/synthetic `FTA`+`FGA` — no test assertions
+changed in spirit, just the column names they exercise.
+
+**Result:** regenerated all 7 seasons' rolling files + both current
+snapshots, retrained. New `@production` v6 (SVC-RBF): CV 0.6282 (was
+0.6254), test 0.6255 (was 0.6308) — both inside the established noise band.
+A wash, like the `NetRtg`/`Pace` addition, not like the rolling-window
+rebuild itself. Reported honestly as such rather than oversold — this was
+always a correctness fix (the feature was measuring the wrong thing), not
+a bet that it would move the number.
+
+**Verification:** unit tests for the two builder scripts + `test_features.py`
++ `test_api.py` run in isolation first (25 passed) before touching real
+data; full suite after retrain (54/54); real `docker build` + `docker run`
++ live `/health` and `/predict` HTTP calls against the rebuilt image (not
+just `docker build` succeeding) — same bar as Part B, since Part B's own
+Docker gap was caught exactly by not skipping this step.
+
+**Not done:** nothing left open from this specific fix. Sanity-checked the
+new FTR values look like real free-throw rates (mean ~0.249, range
+0.16–0.45) rather than the old FT_PCT-shaped values (~0.70–0.85), which
+would have been an obvious tell if the formula were wrong.
+
+---
+
 ## Part B: rolling-window feature rebuild (2026-08-28)
 
 **Status: done, verified, nothing committed yet.**

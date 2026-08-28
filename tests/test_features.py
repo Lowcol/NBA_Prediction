@@ -2,7 +2,7 @@ from features import STAT_MAP, SELECTED_FEATURES, resolve_stat_columns
 
 
 def test_resolve_stat_columns_prefers_first_available_option():
-    columns = ["TEAM_NAME", "Season", "Month", "W_PCT_base", "PIE", "EFG_PCT", "TM_TOV_PCT", "OREB_PCT", "FT_PCT"]
+    columns = ["TEAM_NAME", "Season", "Month", "W_PCT_base", "PIE", "EFG_PCT", "TM_TOV_PCT", "OREB_PCT", "FTR"]
     resolved_map, selected_cols = resolve_stat_columns(columns)
 
     assert resolved_map["W_PCT"] == "W_PCT_base"

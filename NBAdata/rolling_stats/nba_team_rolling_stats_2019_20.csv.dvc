@@ -1,5 +1,5 @@
 outs:
-- md5: 4e287f06e62c0fbeddb4dbe7a53ffebb
-  size: 351465
+- md5: 7799054253b16685462b7109ed34632b
+  size: 370230
   hash: md5
   path: nba_team_rolling_stats_2019_20.csv

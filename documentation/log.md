@@ -2,6 +2,15 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-08-28 — FTR fixed to true free-throw rate (isolated retrain after the rolling-window rebuild)
+
+**State: `FTR` is now `FTA/FGA` (true free-throw rate), not the `FT_PCT` proxy; `@production` (v6, SVC-RBF) — CV 62.8% / test 62.6%, a wash vs. v5's 62.5%/63.1%, both inside the noise band.**
+
+- `FT_PCT` (free-throw shooting *percentage*) was never the right stat for the `FTR` ("free-throw rate") feature — it measured how well a team shoots free throws, not how often it gets to the line. Flagged as a known approximation since the rolling-window rebuild (same day), fixed as a deliberately separate change so its effect could be measured on its own.
+- `build_rolling_team_stats.py` now derives `FTR = FTA/FGA` per game from the already-pulled raw box score columns, then rolls it the same way as the other 9 stats. `features.py`'s `STAT_MAP` and `build_current_rolling_snapshot.py` updated to match (`FT_PCT` → `FTR` throughout).
+- Regenerated all 7 seasons' rolling-stats files and both current-season snapshots; retrained (`@production` v6). Result: a wash, same pattern as the `NetRtg`/`Pace` addition — a real correctness fix, not an accuracy one.
+- Full test suite (54/54) and a real Docker rebuild + live `/health`/`/predict` smoke test both verified after the change.
+
 ## 2026-08-28 — Rolling-window feature rebuild (Part B): month averages replaced with trailing 10-game stats
 
 **State: training and serving both key off per-game rolling stats now, not month-to-date averages; `@production` (v5, Logistic Regression) genuinely improved — CV 62.5% / test 63.1%, up from 61.5% / 59.8%.**

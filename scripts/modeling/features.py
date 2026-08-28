@@ -10,7 +10,7 @@ STAT_MAP: dict[str, list[str]] = {
     "eFG%": ["EFG_PCT"],
     "TOV%": ["TM_TOV_PCT"],
     "ORB%": ["OREB_PCT"],
-    "FTR": ["FT_PCT"],
+    "FTR": ["FTR"],
     "NetRtg": ["NET_RATING"],
     "OffRtg": ["OFF_RATING"],
     "DefRtg": ["DEF_RATING"],
