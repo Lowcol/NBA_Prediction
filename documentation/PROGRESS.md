@@ -3,6 +3,100 @@
 Purpose: a running record of *how* work got done — task specs, design
 decisions made along the way, things ruled out, open questions — not just
 *what* changed. `log.md` is the terse changelog; this is the reasoning
+
+---
+
+## Injury availability (`PlayersOut`) feature (2026-08-28)
+
+**Status: done, verified, not committed.**
+
+Followed the "SHAP audit" research question ("does the internet agree these
+remaining features matter?") — literature backed player availability as
+the best-supported lever but with no clean quantified before/after, and a
+real ceiling (~68-75%) from the sport's own upset rate. User chose to build
+it despite that uncertainty.
+
+**Feasibility research before building anything:** confirmed live that
+official NBA injury-report PDFs exist at a predictable URL
+(`ak-static.cms.nba.com/referee/injury/`), that `pdfplumber`'s automatic
+table detection fails on them (no ruling lines), and that a third-party
+package (`nbainjuries`) already solves multi-era parsing via `tabula-py`
+(Java) — but its own hardcoded season configs prove coverage only starts
+2021-22, not this project's full 2019-20. Verified this is a real archive
+limit, not a URL-guessing miss (found a pre-2021-22 report that validates
+as existing but has an incompatible column layout the package can't parse).
+
+**Two decisions checked with the user before committing effort:**
+1. Build serving support now vs. wait for a second confirming run vs.
+   shelve — chose to build now off one promising (+1.1pt, not clearly
+   above noise) offline result, given it's the second-best single-feature
+   result of the session.
+2. Serving parser: reuse `nbainjuries`+Java, or a custom pure-Python
+   parser — chose custom, to keep Java out of the (currently lean,
+   self-contained) Docker images, accepting the risk of unproven parsing
+   logic against a layout that's changed ~5 times since 2021.
+
+**Historical pull** (background agent, ~5 min wall-clock): 1,055/1,056
+target dates resolved (99.9%), ~99K player-rows across 5 seasons. Found
+during a spot-check that each report is a rolling 1-2 day window (not just
+that day's games) — critical for whoever builds the feature next to filter
+on the report's own `Game Date`, not trust `target_game_date` blindly.
+
+**Offline gate before touching `@production`:** since this is the first
+feature requiring genuinely new live-serving infrastructure (every prior
+feature this session was servable with data already on hand), ran a
+controlled A/B first (identical 6,363 rows with/without the feature) rather
+than retraining `@production` directly the way every other feature was
+tested. Result: CV 0.6324→0.6373, test 0.6363→0.6473 — confirmed worth
+building serving support before committing to it blind.
+
+**Build, via two parallel background agents** (disjoint files, given a
+strict shared contract up front: exact feature names, exact `{"Out",
+"Doubtful"}` threshold, `PlayersOut` NOT in `STAT_MAP` — computed directly
+like `B2B`, not resolved from a snapshot column):
+- Training side: `scripts/data_prep/build_injury_features.py`,
+  `decision_tree_training.py`'s join, `features.py`. Retrained for real:
+  `@production` v10 (SVC-RBF), CV 0.636 / test 0.636 — smaller than the
+  offline prototype's gain, expected since this run uses the full pipeline
+  (chronological split, all other features) rather than the prototype's
+  narrower setup.
+- Serving side: new `serving/inference/injury_report.py` — `pdfplumber`
+  word-coordinate parsing (not `extract_table()`, confirmed not to work on
+  this PDF), column boundaries derived per-page from that page's own
+  header row, forward-filled across pages once found (a real 14-page
+  report confirmed headers do NOT repeat every page). Caught and fixed a
+  real bug during live testing: every page's repeated title line
+  ("Injury Report: ...") was misclassifying its "Injury" token into the
+  Team column via nearest-neighbor matching, corrupting forward-fill —
+  fixed by filtering on the literal "Report:" token, unique to that line.
+  Graceful degradation to `{}` on any failure; 10-minute in-process cache.
+
+**My own verification after both agents landed** (trust-but-verify, same
+bar as every other change this session): read the actual diffs (clean,
+matches the brief exactly, no STAT_MAP leakage); ran the full suite (80/80);
+ran `run_nightly_predictions.py --date 2025-04-01` for real (correctly
+logged "no report found" and defaulted to 0, since real wall-clock time is
+off-season — expected, not a bug, see the new "Known issues" entry in
+`COMPONENTS.md` about `PlayersOut` ignoring `--date`); rebuilt the API
+Docker image and ran a live `/health` + `/predict` smoke test against the
+container (confirms the no-Java design goal actually holds — image builds
+and runs fine with no JVM).
+
+**DVC:** `NBAdata/injury_reports/` (both raw reports and computed counts —
+no "current snapshot" split needed here, since serving never reads this
+directory at all, it fetches live) added whole, same pattern as
+`team_game_logs/`. Not pushed yet.
+
+### Open / not done
+- Nothing left open from this feature specifically.
+- `requirements.txt` gained `pdfplumber` (lightweight, no conflicts) but
+  NOT `nbainjuries` (Java-dependent, training-only, deliberately not pinned).
+- Docs updated (`TRAINING.md`, `COMPONENTS.md`, `log.md`) with the new
+  accuracy row, feature table entry, pipeline description, and two new
+  "Known issues" entries (partial training coverage; `PlayersOut` ignoring
+  `--date` unlike every other feature).
+
+---
 behind it. Read this first when resuming work after a context gap.
 
 ---

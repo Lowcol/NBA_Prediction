@@ -70,6 +70,7 @@ def client(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df())
     monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "fetch_latest_injury_counts", lambda: {})
     with TestClient(main.app) as c:
         yield c
 
@@ -106,6 +107,7 @@ def test_predict_missing_features_returns_422(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df(include_all_stats=False))
     monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "fetch_latest_injury_counts", lambda: {})
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -118,6 +120,7 @@ def test_predict_without_proba_returns_null_probability(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictorNoProba())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df())
     monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "fetch_latest_injury_counts", lambda: {})
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -139,6 +142,7 @@ def test_predict_away_team_win(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictorAwayWin())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df())
     monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "fetch_latest_injury_counts", lambda: {})
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -176,6 +180,7 @@ def test_predict_falls_back_to_latest_season_when_target_missing(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", record_season)
     monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "fetch_latest_injury_counts", lambda: {})
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",

@@ -20,6 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "modeling"))
 sys.path.insert(0, str(PROJECT_ROOT / "serving" / "inference"))
 
 from features import SELECTED_FEATURES, resolve_stat_columns  # noqa: E402
+from injury_report import fetch_latest_injury_counts  # noqa: E402
 from predictor import (  # noqa: E402
     assemble_features,
     collect_rolling_snapshot_files,
@@ -93,7 +94,13 @@ def predict(req: PredictRequest) -> PredictResponse:
     resolved_map, selected_cols = resolve_stat_columns(stats_df.columns)
     resolved_cols = [c for c in selected_cols if c not in ("TEAM_NAME", "Season", "Month")]
 
-    features = assemble_features(stats_df, resolved_map, resolved_cols, home, away, target)
+    # fetch_latest_injury_counts() caches in-process for a few minutes (see
+    # injury_report.py), so calling it per-request here doesn't mean a fresh PDF
+    # download + parse on every single prediction.
+    injury_counts = fetch_latest_injury_counts()
+    features = assemble_features(
+        stats_df, resolved_map, resolved_cols, home, away, target, injury_counts
+    )
     if features is None:
         raise HTTPException(
             status_code=404,

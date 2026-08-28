@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "modeling"))
 sys.path.insert(0, str(PROJECT_ROOT / "serving" / "inference"))
 
 from features import SELECTED_FEATURES, resolve_stat_columns  # noqa: E402
+from injury_report import fetch_latest_injury_counts  # noqa: E402
 from predictor import (  # noqa: E402
     MODEL_PATH,
     SCALER_PATH,
@@ -34,6 +35,7 @@ __all__ = [
     "SCALER_PATH",
     "assemble_features",
     "build_feature_row",
+    "fetch_latest_injury_counts",
     "fetch_schedule",
     "games_on_date",
     "latest_team_stat_row",
@@ -92,11 +94,17 @@ def main() -> None:
 
     predictor = load_predictor()
 
+    # Fetched once per run (not once per game): it's the same live report for every
+    # game on this slate, and each fetch downloads + parses a multi-page PDF.
+    injury_counts = fetch_latest_injury_counts()
+
     results = []
     for _, game in day_games.iterrows():
         home, away = game["Team1"], game["Team2"]
 
-        features = assemble_features(stats_df, resolved_map, resolved_cols, home, away, target)
+        features = assemble_features(
+            stats_df, resolved_map, resolved_cols, home, away, target, injury_counts
+        )
         if features is None:
             print(f"Skipping {home} vs {away}: no usable stats on file for one or both teams.")
             continue

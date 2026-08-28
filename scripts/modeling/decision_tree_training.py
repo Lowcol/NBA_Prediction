@@ -36,6 +36,7 @@ MONTHLY_DIRS = [
 ROLLING_DIRS = [
     DATA_ROOT / "rolling_stats",
 ]
+INJURY_DIR = DATA_ROOT / "injury_reports"
 
 TRAINING_DATASET_PATH = DATA_ROOT / "NBA_Training_Matchups_2019_2025.csv"
 MODEL_OUTPUT_PATH = DATA_ROOT / "best_model.pkl"
@@ -120,6 +121,7 @@ def build_training_frame(matchup_path: Path, rolling_path: Path, season_key: str
     stats_df["TEAM_NAME"] = stats_df["TEAM_NAME"].str.strip().str.lower()
 
     matchups_df["DATE"] = pd.to_datetime(matchups_df["DATE"], errors="coerce")
+    matchups_df["DATE_ONLY"] = matchups_df["DATE"].dt.normalize()
     matchups_df["Season"] = key_to_season_label(season_key)
 
     # resolve_stat_columns() also returns a selected_cols list that unconditionally
@@ -139,6 +141,35 @@ def build_training_frame(matchup_path: Path, rolling_path: Path, season_key: str
 
     merged_df = matchups_df.merge(team1_stats, on=["Team1", "GAME_ID"], how="left")
     merged_df = merged_df.merge(team2_stats, on=["Team2", "GAME_ID"], how="left")
+
+    # Injury coverage only exists for some seasons (the NBA's injury-report
+    # archive starts 2021-22); seasons without a counts file simply don't get
+    # this merge, leaving Team1_PlayersOut/Team2_PlayersOut absent from that
+    # season's frame -- pd.concat() across seasons then introduces NaN for
+    # those rows automatically, which main()'s dropna(subset=selected_features)
+    # already handles like any other missing feature.
+    injury_path = INJURY_DIR / f"team_injury_counts_{season_key}.csv"
+    if injury_path.exists():
+        injury_df = pd.read_csv(injury_path)
+        injury_df["TEAM_NAME"] = injury_df["TEAM_NAME"].str.strip().str.lower()
+        injury_df["GAME_DATE"] = pd.to_datetime(injury_df["GAME_DATE"]).dt.normalize()
+
+        team1_injury = injury_df.rename(
+            columns={"TEAM_NAME": "Team1", "GAME_DATE": "DATE_ONLY", "PlayersOut": "Team1_PlayersOut"}
+        )
+        team2_injury = injury_df.rename(
+            columns={"TEAM_NAME": "Team2", "GAME_DATE": "DATE_ONLY", "PlayersOut": "Team2_PlayersOut"}
+        )
+
+        merged_df = merged_df.merge(team1_injury, on=["Team1", "DATE_ONLY"], how="left")
+        merged_df = merged_df.merge(team2_injury, on=["Team2", "DATE_ONLY"], how="left")
+        # A team with a real game that day but no Out/Doubtful report rows
+        # genuinely has 0 known-unavailable players -- fillna(0), not NaN.
+        merged_df[["Team1_PlayersOut", "Team2_PlayersOut"]] = (
+            merged_df[["Team1_PlayersOut", "Team2_PlayersOut"]].fillna(0)
+        )
+
+    merged_df = merged_df.drop(columns=["DATE_ONLY"])
     return merged_df
 
 

@@ -36,10 +36,10 @@ home team, so the model's output reads directly as "probability home team wins."
 
 ---
 
-## 3. The features (23 inputs)
+## 3. The features (25 inputs)
 
-11 per-team stats × 2 teams + 1 home-court flag. Each stat is a trailing
-10-game average.
+12 per-team stats × 2 teams + 1 home-court flag. Each stat is a trailing
+10-game average unless noted.
 
 | Feature | Meaning | Source |
 |---|---|---|
@@ -54,13 +54,26 @@ home team, so the model's output reads directly as "probability home team wins."
 | `DefRtg` | Defensive rating | `DEF_RATING` |
 | `Pace` | Possessions per 48 min | `PACE` |
 | `B2B` | 1 if back-to-back (0 rest) | `B2B`* |
+| `PlayersOut` | Count of that team's players listed `Out`/`Doubtful` on the NBA's injury report | `PlayersOut`* |
 
-`eFG%`/`TOV%`/`ORB%`/`FTR` are the classic "Four Factors." `B2B` isn't a
-rolling average like the rest — computed dynamically at prediction time
-from the target game's date vs. the team's last known game (`predictor.py`'s
-`is_back_to_back()`), not snapshotted. A SHAP audit (2026-08-28) found the
-continuous rest-day count carried almost no weight vs. `B2B`'s much larger
-effect, so the count was dropped and only the binary flag kept — see §6.
+`eFG%`/`TOV%`/`ORB%`/`FTR` are the classic "Four Factors." `B2B` and
+`PlayersOut` (marked `*`) aren't rolling averages like the rest — both are
+facts about *this specific upcoming game*, computed dynamically at
+prediction time rather than snapshotted (`predictor.py`'s
+`is_back_to_back()` / `injury_report.py`'s `fetch_latest_injury_counts()`).
+A SHAP audit (2026-08-28) found the continuous rest-day count carried
+almost no weight vs. `B2B`'s much larger effect, so the count was dropped
+and only the binary flag kept — see §6.
+
+`PlayersOut` (2026-08-28) only has training coverage for **5 of 7 seasons**
+(2021-22 onward — the NBA's public injury-report archive doesn't go back
+further). Rows for 2019-20/2020-21 get `NaN` for this feature and are
+dropped by the existing `dropna`, same mechanism as any other missing
+feature — so the effective training set shrinks to ~6,600 rows for this
+one feature's sake. Live serving fetches and parses the NBA's official
+injury-report PDF at prediction time (pure Python, no Java — see
+`serving/inference/injury_report.py`); if the fetch fails or no report is
+found, it degrades gracefully to 0 rather than breaking a prediction.
 
 Full ordered list lives in `features.py`'s `SELECTED_FEATURES`. Post-game
 info (final score, plus/minus) is deliberately excluded — that would be
@@ -100,14 +113,21 @@ Two baselines: majority-class (~0.52) and home-team-always-wins (~0.55).
 | + chronological split | 0.627 | 0.624 |
 | + rest days / back-to-back | 0.628 | 0.631 |
 | + SHAP audit: drop `RestDays`, keep `B2B` | 0.629 | 0.630 |
+| + `PlayersOut` (injury availability, 5-season subset) | 0.636 | 0.636 |
 
 The rolling-window switch was the one real, above-noise-band gain (+3pt
 test). Everything since has landed inside the run-to-run noise band
 (±1–1.5pt) — expected for correctness fixes and eval-methodology changes,
 which aren't trying to add new signal. All changes compared against the
-same-period home-court baseline (~0.55).
+same-period home-court baseline (~0.55). **Caveat on the last row:**
+`PlayersOut` also shrinks the training set to the 5 seasons with injury
+coverage (~6,600 rows vs. ~8,300) — a controlled offline A/B on that same
+5-season subset (identical row count with/without the feature) showed a
+cleaner +1.1pt test gain, so some of this row's apparent movement is the
+smaller/different dataset, not purely the feature. Directionally positive
+either way, just not as clean a comparison as the other rows.
 
-Current winner: **Logistic Regression**, though the winner shifts across
+Current winner: **SVC (RBF Kernel)**, though the winner shifts across
 retrains (all 6 models cluster tightly — see §6).
 
 ---
@@ -120,7 +140,7 @@ signal, not algorithm choice. Ordered by expected payoff:
 **Lever 1 — richer features.**
 - ✅ Recent form (rolling windows)
 - ✅ Rest / back-to-backs
-- Player availability / injuries
+- ✅ Player availability / injuries (`PlayersOut`, 5-season coverage only)
 - Opponent-adjusted stats & strength of schedule
 - Real home/away splits (vs. the single `Team1Home` flag)
 - Head-to-head history, pace/style matchups
@@ -161,7 +181,10 @@ market, a different problem than predicting from team performance.
 | Per-game box score pull | `scripts/data_pull/team_game_logs_pull.py` |
 | Rolling-window builder | `scripts/data_prep/build_rolling_team_stats.py` |
 | Current-form snapshot builder | `scripts/data_prep/build_current_rolling_snapshot.py` |
-| Raw data (DVC) | `NBAdata/matchups/`, `NBAdata/team_game_logs/`, `NBAdata/rolling_stats/nba_team_rolling_stats_*.csv` |
+| Historical injury-report pull | `scripts/data_pull/injury_report_pull.py` (needs `nbainjuries`, not pinned) |
+| Injury-count feature builder | `scripts/data_prep/build_injury_features.py` |
+| Live injury-report fetch (serving) | `serving/inference/injury_report.py` |
+| Raw data (DVC) | `NBAdata/matchups/`, `NBAdata/team_game_logs/`, `NBAdata/rolling_stats/nba_team_rolling_stats_*.csv`, `NBAdata/injury_reports/` |
 | Current-form snapshot (git) | `NBAdata/rolling_stats/nba_team_current_rolling_stats_*.csv` |
 | Combined training set (generated) | `NBAdata/NBA_Training_Matchups_2019_2025.csv` |
 | Saved model + scaler | `NBAdata/best_model.pkl`, `NBAdata/scaler.pkl` |

@@ -105,7 +105,13 @@ def is_back_to_back(last_game_date, target: date) -> float:
 
 
 def build_feature_row(
-    home_row: pd.Series, away_row: pd.Series, resolved_map: dict[str, str], target: date
+    home_row: pd.Series,
+    away_row: pd.Series,
+    resolved_map: dict[str, str],
+    target: date,
+    home: str,
+    away: str,
+    injury_counts: dict[str, int] | None = None,
 ) -> dict:
     row = {"Team1Home": 1}
     for model_col, source_col in resolved_map.items():
@@ -113,6 +119,12 @@ def build_feature_row(
         row[f"Team2_{model_col}"] = away_row[source_col]
     row["Team1_B2B"] = is_back_to_back(home_row["GAME_DATE"], target)
     row["Team2_B2B"] = is_back_to_back(away_row["GAME_DATE"], target)
+    # Like B2B, this is a fact about today's specific game (not a snapshotted team
+    # stat), so it's set directly here rather than through resolved_map. See
+    # serving/inference/injury_report.py for how injury_counts is fetched.
+    injury_counts = injury_counts or {}
+    row["Team1_PlayersOut"] = injury_counts.get(home, 0)
+    row["Team2_PlayersOut"] = injury_counts.get(away, 0)
     return row
 
 
@@ -123,6 +135,7 @@ def assemble_features(
     home: str,
     away: str,
     target: date,
+    injury_counts: dict[str, int] | None = None,
 ) -> dict | None:
     """Look up both teams' latest stats and build one feature row.
 
@@ -133,7 +146,7 @@ def assemble_features(
     away_row = latest_team_stat_row(stats_df, away, resolved_cols)
     if home_row is None or away_row is None:
         return None
-    return build_feature_row(home_row, away_row, resolved_map, target)
+    return build_feature_row(home_row, away_row, resolved_map, target, home, away, injury_counts)
 
 
 def predict_from_features(predictor, features: dict) -> tuple[int, float | None]:

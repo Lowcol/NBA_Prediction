@@ -126,7 +126,10 @@ def test_build_feature_row_prefixes_home_and_away_correctly():
     away_row = pd.Series({"W_PCT_base": 0.4, "PIE": 0.45, "GAME_DATE": "2025-03-29"})
     resolved_map = {"W_PCT": "W_PCT_base", "PIE": "PIE"}
 
-    features = build_feature_row(home_row, away_row, resolved_map, date(2025, 4, 1))
+    features = build_feature_row(
+        home_row, away_row, resolved_map, date(2025, 4, 1), "denver nuggets", "miami heat",
+        {"denver nuggets": 2},
+    )
 
     assert features == {
         "Team1Home": 1,
@@ -136,7 +139,21 @@ def test_build_feature_row_prefixes_home_and_away_correctly():
         "Team2_PIE": 0.45,
         "Team1_B2B": 0.0,
         "Team2_B2B": 0.0,
+        "Team1_PlayersOut": 2,
+        "Team2_PlayersOut": 0,
     }
+
+
+def test_build_feature_row_defaults_players_out_to_zero_without_injury_counts():
+    home_row = pd.Series({"PIE": 0.55, "GAME_DATE": "2025-03-28"})
+    away_row = pd.Series({"PIE": 0.45, "GAME_DATE": "2025-03-29"})
+
+    features = build_feature_row(
+        home_row, away_row, {"PIE": "PIE"}, date(2025, 4, 1), "denver nuggets", "miami heat",
+    )
+
+    assert features["Team1_PlayersOut"] == 0
+    assert features["Team2_PlayersOut"] == 0
 
 
 def test_is_back_to_back_true_when_played_yesterday():

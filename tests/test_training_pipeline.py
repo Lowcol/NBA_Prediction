@@ -4,6 +4,7 @@ import pandas as pd
 
 import decision_tree_training
 from decision_tree_training import (
+    build_training_frame,
     chronological_train_test_split,
     collect_matchup_files,
     collect_monthly_files,
@@ -109,6 +110,11 @@ def test_training_dataset_includes_all_seasons_with_no_missing_features(tmp_path
     non_null = dataset.dropna(subset=SELECTED_FEATURES + ["Team1Win"])
     rows_per_season = non_null.groupby("SeasonKey").size()
 
+    # 2019-20/2020-21 have no injury-report coverage (the NBA's injury-report
+    # archive only goes back to 2021-22), so Team1_PlayersOut/Team2_PlayersOut
+    # are NaN for their rows and dropna() above correctly drops them entirely.
+    SEASONS_WITHOUT_INJURY_DATA = {"2019_20", "2020_21"}
+
     # Regression guard: with the (Team, GAME_ID) rolling-window join, dropna
     # only removes each team's own first MIN_GAMES_IN_WINDOW-1 games of a
     # season (no window yet), not a whole month's worth of games as with the
@@ -117,8 +123,78 @@ def test_training_dataset_includes_all_seasons_with_no_missing_features(tmp_path
     # at 1,095-1,275 rows/season; 1,000 is a floor comfortably below that
     # range but high enough that a join/labeling regression (e.g. back to
     # month-level drop rates) would still fail this.
-    for season_key in EXPECTED_SEASON_KEYS:
+    for season_key in EXPECTED_SEASON_KEYS - SEASONS_WITHOUT_INJURY_DATA:
         assert rows_per_season.get(season_key, 0) > 1000, (
             f"season {season_key} contributed too few usable training rows "
             "(possible join/labeling regression)"
         )
+
+    for season_key in SEASONS_WITHOUT_INJURY_DATA:
+        assert rows_per_season.get(season_key, 0) == 0, (
+            f"season {season_key} has no injury-counts file and should be fully "
+            "dropped by dropna() once PlayersOut is a selected feature"
+        )
+
+
+def _write_minimal_matchup_and_rolling(tmp_path, season_key, game_id, date, team1, team2):
+    matchup_path = tmp_path / f"matchups_{season_key}.csv"
+    rolling_path = tmp_path / f"rolling_{season_key}.csv"
+
+    pd.DataFrame({
+        "GAME_ID": [game_id],
+        "DATE": [date],
+        "Team1": [team1],
+        "Team2": [team2],
+        "Team1Home": [1],
+        "Team1Win": [1],
+    }).to_csv(matchup_path, index=False)
+
+    pd.DataFrame({
+        "TEAM_NAME": [team1, team2],
+        "GAME_ID": [game_id, game_id],
+        "GAME_DATE": [date, date],
+        "Season": [key_to_season_label(season_key)] * 2,
+        "PIE": [0.1, 0.2],
+    }).to_csv(rolling_path, index=False)
+
+    return matchup_path, rolling_path
+
+
+def test_build_training_frame_merges_injury_counts_when_file_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(decision_tree_training, "INJURY_DIR", tmp_path)
+
+    matchup_path, rolling_path = _write_minimal_matchup_and_rolling(
+        tmp_path, "2024_25", game_id=1, date="2024-11-12",
+        team1="atlanta hawks", team2="boston celtics",
+    )
+
+    # atlanta has 2 Out/Doubtful players reported on 2024-11-12; boston has
+    # no report row at all that day, which should come back as 0, not NaN.
+    pd.DataFrame({
+        "GAME_DATE": ["2024-11-12"],
+        "TEAM_NAME": ["atlanta hawks"],
+        "PlayersOut": [2],
+    }).to_csv(tmp_path / "team_injury_counts_2024_25.csv", index=False)
+
+    result = build_training_frame(matchup_path, rolling_path, "2024_25")
+
+    row = result.iloc[0]
+    assert row["Team1_PlayersOut"] == 2
+    assert row["Team2_PlayersOut"] == 0
+    assert "DATE_ONLY" not in result.columns
+
+
+def test_build_training_frame_leaves_playersout_absent_when_no_injury_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(decision_tree_training, "INJURY_DIR", tmp_path)
+
+    # No team_injury_counts_2019_20.csv is written to INJURY_DIR (tmp_path).
+    matchup_path, rolling_path = _write_minimal_matchup_and_rolling(
+        tmp_path, "2019_20", game_id=1, date="2019-11-12",
+        team1="atlanta hawks", team2="boston celtics",
+    )
+
+    result = build_training_frame(matchup_path, rolling_path, "2019_20")
+
+    assert "Team1_PlayersOut" not in result.columns
+    assert "Team2_PlayersOut" not in result.columns
+    assert "DATE_ONLY" not in result.columns

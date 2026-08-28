@@ -32,6 +32,7 @@ SELECTED_FEATURES = [
     "Team1_DefRtg",
     "Team1_Pace",
     "Team1_B2B",
+    "Team1_PlayersOut",
     "Team2_PIE",
     "Team2_eFG%",
     "Team2_TOV%",
@@ -42,6 +43,7 @@ SELECTED_FEATURES = [
     "Team2_DefRtg",
     "Team2_Pace",
     "Team2_B2B",
+    "Team2_PlayersOut",
 ]
 
 

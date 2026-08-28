@@ -2,6 +2,21 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-08-28 — Injury availability (`PlayersOut`) feature
+
+Added a count of each team's `Out`/`Doubtful` players from the NBA's official
+injury report — 23 → 25 features. Historical pull (`nbainjuries`, needs Java,
+training-only) covers 5 of 7 seasons (2021-22+, the archive doesn't go back
+further); 2019-20/2020-21 rows drop via the existing `dropna`. An offline
+controlled A/B (identical row counts) showed +1.1pt test on the 5-season
+subset before committing to building live serving support. Live serving uses
+a custom pure-Python `pdfplumber` parser instead (`serving/inference/injury_report.py`)
+to keep Java out of the Docker images — fetches and parses the current NBA
+injury-report PDF at prediction time, degrading gracefully to 0 on any
+failure. `@production` v10 (SVC-RBF): CV 0.636 / test 0.636. Built via two
+parallel background agents (training-side vs. serving-side, disjoint files) —
+80/80 tests, real Docker rebuild + live smoke test, both verified after landing.
+
 ## 2026-08-28 — SHAP audit: dropped `RestDays`, kept `B2B`
 
 Ran a SHAP feature-importance audit (`scripts/modeling/feature_importance.py`,

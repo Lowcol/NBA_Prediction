@@ -38,8 +38,13 @@ def test_selected_features_excludes_postgame_leakage():
 
 
 def test_selected_features_map_to_known_stats_or_home():
+    # PlayersOut is a separately-computed feature (like injury availability
+    # counts joined in decision_tree_training.py, not a rolling-stats/snapshot
+    # column resolved via STAT_MAP) -- it's expected to be exempt here.
     for feature in SELECTED_FEATURES:
         if feature == "Team1Home":
+            continue
+        if feature.endswith("_PlayersOut"):
             continue
         assert feature.startswith("Team1_") or feature.startswith("Team2_")
         stat_name = feature.split("_", 1)[1]

@@ -1,0 +1,6 @@
+outs:
+- md5: ee3389375d1373cf46cf706b028537ad.dir
+  size: 13396850
+  nfiles: 10
+  hash: md5
+  path: injury_reports
