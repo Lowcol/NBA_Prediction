@@ -1,0 +1,5 @@
+outs:
+- md5: 0333b9df6a38901450ff6a2d29eff8fa
+  size: 406303
+  hash: md5
+  path: nba_team_rolling_stats_2021_22.csv

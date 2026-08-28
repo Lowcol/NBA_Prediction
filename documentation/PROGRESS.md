@@ -7,7 +7,136 @@ behind it. Read this first when resuming work after a context gap.
 
 ---
 
-## Added efficiency/pace features; investigated eval methodology (2026-07-28)
+## Part B: rolling-window feature rebuild (2026-08-28)
+
+**Status: done, verified, nothing committed yet.**
+
+### Context / why
+Follow-on from the same-day efficiency/pace-feature session below. User
+compared this project's ~60% accuracy to picking the betting favorite
+(~68-69%) and asked whether more historical data would help. Diagnosis: 6
+very different model types (linear, tree, boosted, SVM) all converged on
+~60% even after the NetRtg/Pace addition — a sign the ceiling was in the
+*features* (a whole-month average blends a team's whole month together),
+not data volume or model choice. User asked to scope a plan to replace
+month-to-date averages with trailing rolling-game-window averages ("Part
+B"), plus asked whether net rating/efficiency/pace were available from the
+API (they were, already added earlier that session — see below).
+
+### Planning
+Used `EnterPlanMode`. Spawned a Plan-type validation agent to check the
+design against real files before committing to it — it confirmed the
+`(Team, GAME_ID)` join-key assumption by reading actual `GAME_ID` values in
+`NBAdata/matchups/` and the one existing per-game pull, flagged that
+`resolve_stat_columns()` unconditionally includes `"Month"` in its
+`selected_cols` return (a real gotcha that would've broken naively), and
+surfaced several decisions to make explicit rather than silently resolve
+(rolling window size, season-boundary carryover, `latest_team_stat_row`'s
+signature simplification). Plan written to
+`C:\Users\godin\.claude\plans\dazzling-wondering-pelican.md`.
+
+**Live-verified before writing any pull code:** the original ballpark
+estimate of "~9,000 API calls" (one per game, via `BoxScoreAdvancedV2`) was
+wrong. `nba_api`'s `TeamGameLogs` endpoint, called with
+`measure_type_player_game_logs_nullable='Advanced'`/`'Base'`, returns **one
+row per team per game in bulk for a whole season+season_type in one call**
+— confirmed live (2024-25 Regular Season: 2460 rows, one call). Real cost:
+~56 calls for all 7 seasons, same order as the existing monthly pull
+scripts. This changed Part B from "a big, risky data-acquisition problem"
+to "a cheap pull, mostly reworking the join."
+
+### Approval hiccup
+User approved via free text ("that sounds good, use as many agents as you
+need") rather than the ExitPlanMode UI button, which the harness registered
+as a *rejection* of that specific tool call. I proceeded anyway based on
+the clear text approval — correctly for my own session (Write/Bash calls
+worked), but a `general-purpose` subagent spawned for Stage 2 inherited a
+plan-mode lock with **no `ExitPlanMode` tool in its list at all**, and
+resuming it hit a permission-classifier block. Fix: called `ExitPlanMode`
+again explicitly in the parent session (this time it registered as a real
+approval, since a concrete plan file existed), then spawned a **fresh**
+Stage 2 agent rather than continuing the stuck one. Lesson for next time:
+after a plan gets approved via free text instead of the button, explicitly
+call `ExitPlanMode` again before spawning any subagents that might inherit
+the lock.
+
+### What got built (7 stages, matching the plan file)
+- **Stage 0-1** (done directly, not delegated — needed live API access I
+  wanted to monitor): `scripts/data_pull/team_game_logs_pull.py`, pulls
+  Base+Advanced `TeamGameLogs` for all 7 seasons × 4 season types. Verified
+  the `(Team, GAME_ID)` join key for real: 0 matchup `GAME_ID`s missing from
+  the new per-game data, across every season.
+- **Stage 2** (delegated, after one false start — see above):
+  `scripts/data_prep/build_rolling_team_stats.py`. Trailing 10-game
+  averages, `.shift(1)` before `.rolling(10)`, `MIN_GAMES_IN_WINDOW=3`,
+  Pre-Season excluded from window contributions. `W_PCT` derived from `WL`
+  (changes meaning from season-cumulative to trailing — documented).
+  6 new tests including the crux leakage regression test. Verified against
+  real data (Denver Nuggets' `games_in_window` climbed 0→10 exactly as
+  expected across its first 12 games).
+- **Stage 3 & 4** (delegated in parallel — disjoint file sets, confirmed no
+  conflicts): Stage 3 reworked `decision_tree_training.py`'s join
+  (`["Team","Season","Month"]` → `["Team","GAME_ID"]`), re-derived the
+  per-season row-count test floor from real output (`>100` → `>1000` — real
+  drop rate is 2-4%/season now, not the much higher month-granularity rate).
+  Stage 4 built `build_current_rolling_snapshot.py` (one row per team,
+  season-boundary carryover documented as intentional and asymmetric vs.
+  training) and reworked `predictor.py`/batch/API to consume it, dropping
+  the now-unnecessary `month` parameter and the old month-wraparound-sort
+  fallback entirely.
+- **Stage 6** (retrain): happened automatically as part of Stage 3's
+  verification run. New `@production` v5, **Logistic Regression**, CV
+  0.6254 / test 0.6308 — up from v4's 0.615/0.598, a real improvement
+  clearing the documented noise band (~±1-1.5pt), not a wash like the
+  NetRtg/Pace addition was.
+- **Stage 7** (DVC wiring, done directly): `NBAdata/team_game_logs/` and
+  the 7 historical `nba_team_rolling_stats_*.csv` files added to DVC
+  (file-level `.gitignore` entries, not directory-level, so the future
+  `nba_team_current_rolling_stats_*.csv` snapshot files stay git-tracked —
+  mirrors how `monthly_stats/` was split from `archive/`). Not pushed to S3
+  — outward action, gated on user say-so, same as every prior DVC change in
+  this project.
+- **Not in the original plan, caught during review:** `docker/Dockerfile.api`
+  still copied `NBAdata/monthly_stats/` into the image — would have shipped
+  a broken container (predictor.py no longer reads that path at all). Fixed
+  to copy the new snapshot glob instead; rebuilt the image and smoke-tested
+  it for real (`docker run` + `/health` + a live `/predict` call against the
+  baked-in data, both correct).
+- **Docs** (`TRAINING.md`, `COMPONENTS.md`, `README.md`, `log.md`): rewritten
+  where stale — data section, feature table, accuracy numbers, "Where
+  everything lives" table, repo structure, pipeline stage descriptions,
+  "Known issues" (moved the residual-leakage entry to fixed; added two new
+  documented behaviors: the snapshot's lack of date-bounding, the
+  train/serve season-boundary asymmetry).
+
+### Verification performed
+- Every stage's own test suite run individually, then full `pytest tests/
+  -q` re-run by me after both parallel agents finished: **54/54 passing**.
+- Read and spot-checked the actual diffs myself (not just trusted agent
+  self-reports) for `decision_tree_training.py`, `predictor.py`,
+  `main.py`/`run_nightly_predictions.py` — confirmed the `resolve_stat_
+  columns()` "Month" gotcha was actually handled correctly, confirmed the
+  signature simplification propagated to every call site.
+- Docker image rebuilt and run for real (not just `docker build` — an
+  actual `docker run` + live HTTP calls), since this is exactly the kind of
+  gap a code-only review would miss.
+- Cleaned up a stray `NBAdata/predictions/predictions_2025-04-01.csv`
+  left over from Stage 4's own smoke test, matching this project's existing
+  "test-only prediction CSVs get deleted after verification" convention
+  (see the Phase 1 entry below).
+
+### Open / not done
+- Optional follow-up, deliberately deferred: fix `FTR` to be true
+  `FTA/FGA` instead of the `FT_PCT` proxy (cheap now, raw box score columns
+  are already pulled) — kept separate so any future accuracy change is
+  attributable to it alone, not conflated with this rebuild.
+- Not decided: whether/when to run the `ROLLING_WINDOW` sweep (5/10/15) —
+  the plan treats N=10 as a reasonable default, not a tuned one.
+- Nothing committed or pushed to DVC/S3 — waiting on explicit go-ahead.
+
+---
+
+## Added efficiency/pace features; investigated eval methodology (2026-08-28)
 
 **Status: code + tests done, retrained (v4), docs updated. Nothing committed yet.**
 

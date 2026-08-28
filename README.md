@@ -46,11 +46,13 @@ pip install -r requirements.txt          # includes dvc[s3]
 ### 2. Get the data (only needed to retrain or run the full test suite)
 
 **To just run the API or batch predictions, skip this step.** The trained model
-(`best_model.pkl` / `scaler.pkl`) and the current-season team stats the model reads
-as input (`NBAdata/monthly_stats/`) are committed to git, so serving works straight
-after cloning — no credentials, no download.
+(`best_model.pkl` / `scaler.pkl`) and the current-form team stats the model reads
+as input (`NBAdata/rolling_stats/nba_team_current_rolling_stats_*.csv`) are
+committed to git, so serving works straight after cloning — no credentials,
+no download.
 
-The bulk **training** data (historical matchups, `NBAdata/matchups/` + `archive/`)
+The bulk **training** data (historical matchups + per-game team box scores,
+`NBAdata/matchups/` + `NBAdata/team_game_logs/` + `archive/`)
 is not in git — it's versioned with DVC and stored in S3. You only need it to
 _re-train_ the model or to run the data-dependent tests. Pull it (needs AWS
 credentials for the bucket, via `~/.aws/credentials` or the

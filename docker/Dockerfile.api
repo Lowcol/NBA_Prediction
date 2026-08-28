@@ -8,9 +8,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY scripts/ scripts/
 COPY serving/ serving/
 
-# Bake in the trained model + current-season stats (both git-tracked) so the image
+# Bake in the trained model + current-form snapshot (both git-tracked) so the image
 # is self-contained: no volume mount or dvc pull needed to serve predictions.
-COPY NBAdata/monthly_stats/ NBAdata/monthly_stats/
+COPY NBAdata/rolling_stats/nba_team_current_rolling_stats_*.csv NBAdata/rolling_stats/
 COPY NBAdata/best_model.pkl NBAdata/scaler.pkl NBAdata/
 
 EXPOSE 8000

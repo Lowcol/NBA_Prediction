@@ -1,0 +1,6 @@
+outs:
+- md5: ce129e57c49a5a81ace3eb533ae4dac3.dir
+  size: 4455937
+  nfiles: 7
+  hash: md5
+  path: team_game_logs

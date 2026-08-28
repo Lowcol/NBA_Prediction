@@ -33,6 +33,9 @@ MONTHLY_DIRS = [
     DATA_ROOT / "monthly_stats",
     HISTORICAL_ROOT / "monthly_stats",
 ]
+ROLLING_DIRS = [
+    DATA_ROOT / "rolling_stats",
+]
 
 TRAINING_DATASET_PATH = DATA_ROOT / "NBA_Training_Matchups_2019_2025.csv"
 MODEL_OUTPUT_PATH = DATA_ROOT / "best_model.pkl"
@@ -57,6 +60,13 @@ def parse_monthly_season_key(path: Path) -> str | None:
     return f"{match.group(1)}_{match.group(2)}"
 
 
+def parse_rolling_season_key(path: Path) -> str | None:
+    match = re.search(r"nba_team_rolling_stats_(\d{4})_(\d{2})\.csv$", path.name)
+    if not match:
+        return None
+    return f"{match.group(1)}_{match.group(2)}"
+
+
 def key_to_season_label(key: str) -> str:
     start, end = key.split("_")
     return f"{start}-{end}"
@@ -71,12 +81,7 @@ def collect_matchup_files() -> dict[str, Path]:
             season_key = parse_matchup_season_key(file_path)
             if season_key is None:
                 continue
-            previous = season_files.get(season_key)
-            if previous is None:
-                season_files[season_key] = file_path
-                continue
-            if "withMonth" in previous.name and "withMonth" not in file_path.name:
-                season_files[season_key] = file_path
+            season_files[season_key] = file_path
     return season_files
 
 
@@ -93,22 +98,34 @@ def collect_monthly_files() -> dict[str, Path]:
     return season_files
 
 
-def build_training_frame(matchup_path: Path, monthly_path: Path, season_key: str) -> pd.DataFrame:
+def collect_rolling_files() -> dict[str, Path]:
+    season_files: dict[str, Path] = {}
+    for directory in ROLLING_DIRS:
+        if not directory.exists():
+            continue
+        for file_path in directory.glob("nba_team_rolling_stats_*.csv"):
+            season_key = parse_rolling_season_key(file_path)
+            if season_key is None:
+                continue
+            season_files[season_key] = file_path
+    return season_files
+
+
+def build_training_frame(matchup_path: Path, rolling_path: Path, season_key: str) -> pd.DataFrame:
     matchups_df = pd.read_csv(matchup_path)
-    stats_df = pd.read_csv(monthly_path)
+    stats_df = pd.read_csv(rolling_path)
 
     matchups_df["Team1"] = matchups_df["Team1"].str.strip().str.lower()
     matchups_df["Team2"] = matchups_df["Team2"].str.strip().str.lower()
     stats_df["TEAM_NAME"] = stats_df["TEAM_NAME"].str.strip().str.lower()
 
     matchups_df["DATE"] = pd.to_datetime(matchups_df["DATE"], errors="coerce")
-    matchups_df["Month"] = matchups_df["DATE"].dt.month
     matchups_df["Season"] = key_to_season_label(season_key)
 
-    stats_df["Month"] = pd.to_numeric(stats_df["Month"], errors="coerce")
-    stats_df["Season"] = stats_df["Season"].astype(str)
-
-    resolved_map, selected_cols = resolve_stat_columns(stats_df.columns)
+    # resolve_stat_columns() also returns a selected_cols list that unconditionally
+    # includes "Month" (a monthly-stats artifact); the rolling-stats file has no
+    # Month column, so only resolved_map (model_col -> source_col) is used here.
+    resolved_map, _selected_cols = resolve_stat_columns(stats_df.columns)
 
     team1_rename = {"TEAM_NAME": "Team1"}
     team2_rename = {"TEAM_NAME": "Team2"}
@@ -116,28 +133,29 @@ def build_training_frame(matchup_path: Path, monthly_path: Path, season_key: str
         team1_rename[source_col] = f"Team1_{model_col}"
         team2_rename[source_col] = f"Team2_{model_col}"
 
-    team1_stats = stats_df[selected_cols].rename(columns=team1_rename)
-    team2_stats = stats_df[selected_cols].rename(columns=team2_rename)
+    select_cols = ["TEAM_NAME", "GAME_ID"] + list(resolved_map.values())
+    team1_stats = stats_df[select_cols].rename(columns=team1_rename)
+    team2_stats = stats_df[select_cols].rename(columns=team2_rename)
 
-    merged_df = matchups_df.merge(team1_stats, on=["Team1", "Season", "Month"], how="left")
-    merged_df = merged_df.merge(team2_stats, on=["Team2", "Season", "Month"], how="left")
+    merged_df = matchups_df.merge(team1_stats, on=["Team1", "GAME_ID"], how="left")
+    merged_df = merged_df.merge(team2_stats, on=["Team2", "GAME_ID"], how="left")
     return merged_df
 
 
 def build_historical_training_dataset() -> pd.DataFrame:
     matchup_files = collect_matchup_files()
-    monthly_files = collect_monthly_files()
-    common_seasons = sorted(set(matchup_files).intersection(monthly_files))
+    rolling_files = collect_rolling_files()
+    common_seasons = sorted(set(matchup_files).intersection(rolling_files))
     if not common_seasons:
         raise FileNotFoundError(
-            "No overlapping season files found between matchup and monthly stats directories."
+            "No overlapping season files found between matchup and rolling stats directories."
         )
 
     season_frames: list[pd.DataFrame] = []
     for season_key in common_seasons:
         frame = build_training_frame(
             matchup_path=matchup_files[season_key],
-            monthly_path=monthly_files[season_key],
+            rolling_path=rolling_files[season_key],
             season_key=season_key,
         )
         frame["SeasonKey"] = season_key

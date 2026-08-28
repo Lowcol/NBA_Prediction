@@ -2,6 +2,24 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-08-28 — Rolling-window feature rebuild (Part B): month averages replaced with trailing 10-game stats
+
+**State: training and serving both key off per-game rolling stats now, not month-to-date averages; `@production` (v5, Logistic Regression) genuinely improved — CV 62.5% / test 63.1%, up from 61.5% / 59.8%.**
+
+- Added `NetRtg`/`OffRtg`/`DefRtg`/`Pace` as month-level features first (13 → 21 features) to isolate whether the ceiling was stat variety — it wasn't (a wash, CV 61.5%/test 59.8% vs the prior 61.1%/60.0%). Also ran a one-off chronological-split diagnostic against the then-current model to check the random split wasn't flattering the score — it wasn't (61.4% chronological vs. 60.0% random).
+- Both diagnostics pointed at time resolution, not stat variety or eval methodology, as the real remaining lever — so rebuilt the feature pipeline around it:
+  - New `scripts/data_pull/team_game_logs_pull.py` pulls per-game team box scores (Base + Advanced) via `TeamGameLogs`, one bulk call per season/season-type/measure-type (~56 calls total for all 7 seasons — not the ~9,000 individually-called games originally estimated).
+  - New `scripts/data_prep/build_rolling_team_stats.py` computes trailing 10-game rolling averages per team per game, `.shift(1)` before `.rolling(10)` so a game's own stats can never leak into its own average (`NBAdata/rolling_stats/`). Regression-tested directly: `test_build_rolling_team_stats.py`'s leakage test asserts this.
+  - New `scripts/data_prep/build_current_rolling_snapshot.py` condenses that into a one-row-per-team "current form" snapshot for serving, with a documented season-boundary carryover exception (falls back to the previous season's tail if a team has no valid games yet this season) — training does not do this, it just drops those early rows.
+  - `decision_tree_training.py`'s join moved from `["Team", "Season", "Month"]` (approximate) to `["Team", "GAME_ID"]` (exact — both matchups and the new per-game logs share the same NBA game IDs, confirmed 0 mismatches across all 7 seasons).
+  - `serving/inference/predictor.py`'s `latest_team_stat_row`/`assemble_features` simplified (dropped the `month` parameter and the old month-wraparound-sort fallback entirely) since the snapshot is already "one row per team, already current." `serving/batch/run_nightly_predictions.py` and `serving/api/main.py` updated to match.
+  - `docker/Dockerfile.api` updated to bake in the new snapshot files instead of the old `monthly_stats/`; rebuilt and smoke-tested end-to-end (container health check + a real `/predict` call against the baked-in data both worked).
+- `merge_advanced_base_stats.py`, `monthly_stats_pull.py`/`monthly_team_stat_pull.py`, `nba_api_pull.py`, and the old `NBAdata/monthly_stats/` data are superseded and unreferenced by the pipeline as of this change — left in place rather than deleted (same "leave it, don't delete DVC-tracked/working history" pattern used elsewhere in this project).
+- Fixes the "residual, smaller leakage" issue that had been open since 2026-07-15 (see `COMPONENTS.md`, "Known issues") — a trailing window ending strictly before the target game can't leak by construction, unlike a month aggregate that included the game's own contribution.
+- New known limitation, documented in `COMPONENTS.md`: the serving snapshot always reflects the *most recent* data on file, not "as of the requested date" — so `run_nightly_predictions.py --date <past date>` no longer doubles as point-in-time historical backtesting the way it arguably did under the old month-keyed lookup.
+- Implementation split across parallel background agents (training-join rework and serving rework touch disjoint files, ran concurrently) plus direct work for the live API pulls, DVC wiring, Docker fix, and this doc pass. Full test suite: 54/54 passing throughout.
+- Not yet done, deliberately deferred as a separate follow-up so any accuracy change is attributable on its own: fixing `FTR` to be true `FTA/FGA` instead of the current `FT_PCT` proxy (cheap now that raw `FTA`/`FGA` are pulled per-game anyway). Also not done: pushing the new DVC-tracked data (`team_game_logs.dvc`, the per-game `rolling_stats` `.dvc` files) to the S3 remote, or committing any of this — both are outward/durable actions gated on explicit user say-so, same pattern as every prior phase in this project.
+
 ## 2026-07-24 — Web UI, probability fix, hyperparameter tuning, 2025-26 season, self-contained serving
 
 **State: a two-team dropdown UI is served from the API; probabilities are real (not vote counts); all 6 models are tuned via `GridSearchCV`; training now covers 7 seasons (2019-20..2025-26) with Random Forest as the current `@production` model (v3, CV 0.611 / test 0.600); the API and batch job run straight after cloning with no AWS credentials.**

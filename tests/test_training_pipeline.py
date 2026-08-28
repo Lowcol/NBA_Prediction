@@ -6,9 +6,11 @@ import decision_tree_training
 from decision_tree_training import (
     collect_matchup_files,
     collect_monthly_files,
+    collect_rolling_files,
     key_to_season_label,
     parse_matchup_season_key,
     parse_monthly_season_key,
+    parse_rolling_season_key,
 )
 from features import SELECTED_FEATURES
 
@@ -25,6 +27,11 @@ def test_parse_monthly_season_key():
     assert parse_monthly_season_key(Path("something_else.csv")) is None
 
 
+def test_parse_rolling_season_key():
+    assert parse_rolling_season_key(Path("nba_team_rolling_stats_2024_25.csv")) == "2024_25"
+    assert parse_rolling_season_key(Path("something_else.csv")) is None
+
+
 def test_key_to_season_label():
     assert key_to_season_label("2024_25") == "2024-25"
 
@@ -36,6 +43,11 @@ def test_collect_matchup_files_finds_all_seasons():
 
 def test_collect_monthly_files_finds_all_seasons():
     season_files = collect_monthly_files()
+    assert EXPECTED_SEASON_KEYS.issubset(season_files.keys())
+
+
+def test_collect_rolling_files_finds_all_seasons():
+    season_files = collect_rolling_files()
     assert EXPECTED_SEASON_KEYS.issubset(season_files.keys())
 
 
@@ -67,14 +79,16 @@ def test_training_dataset_includes_all_seasons_with_no_missing_features(tmp_path
     non_null = dataset.dropna(subset=SELECTED_FEATURES + ["Team1Win"])
     rows_per_season = non_null.groupby("SeasonKey").size()
 
-    # Regression guard: the season-mislabeling bug caused every season
-    # except 2019-20 to be silently dropped here by the dropna above (i.e.
-    # rows_per_season == 0 for 5 of 6 seasons). Each season has 1,100+ raw
-    # matchups, so 100 is a conservative floor: comfortably below normal
-    # season-to-season variation in how many rows survive dropna, but high
-    # enough that a season being wiped out again would still fail this.
+    # Regression guard: with the (Team, GAME_ID) rolling-window join, dropna
+    # only removes each team's own first MIN_GAMES_IN_WINDOW-1 games of a
+    # season (no window yet), not a whole month's worth of games as with the
+    # old (Team, Season, Month) join -- so drop rates are much lower than
+    # they used to be. A real run against the live data (2026-08-28) landed
+    # at 1,095-1,275 rows/season; 1,000 is a floor comfortably below that
+    # range but high enough that a join/labeling regression (e.g. back to
+    # month-level drop rates) would still fail this.
     for season_key in EXPECTED_SEASON_KEYS:
-        assert rows_per_season.get(season_key, 0) > 100, (
+        assert rows_per_season.get(season_key, 0) > 1000, (
             f"season {season_key} contributed too few usable training rows "
             "(possible join/labeling regression)"
         )

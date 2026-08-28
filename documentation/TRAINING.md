@@ -19,21 +19,45 @@ It's a yes/no (binary) prediction. The model also returns a probability — e.g.
 
 ## 2. The data
 
-- **Source:** historical NBA games and monthly team stats pulled from the NBA
-  API, stored as CSVs under `NBAdata/`. Most of this (matchups, past-season
-  stats) is tracked with DVC, not committed to git — run `dvc pull` to fetch
-  it. The current season's stats (`NBAdata/monthly_stats/`) are committed
-  straight to git instead, so serving works without a DVC pull.
+- **Source:** historical NBA games and per-game team box scores pulled from
+  the NBA API, stored as CSVs under `NBAdata/`. Most of this (matchups,
+  per-game team logs) is tracked with DVC, not committed to git — run
+  `dvc pull` to fetch it. A small per-team "current form" snapshot
+  (`NBAdata/rolling_stats/nba_team_current_rolling_stats_<season>.csv`) is
+  committed straight to git instead, so serving works without a DVC pull.
 - **Seasons:** seven, from **2019-20 through 2025-26**.
 - **Size:** about **8,900 games** total (roughly 1,100–1,300 per season).
-- **One row = one game.** Each row pairs the two teams' season-to-date stats
-  (as of that game's month) with the actual outcome.
+- **One row = one game.** Each row pairs the two teams' stats **as of that
+  specific game** (see below) with the actual outcome.
+
+**2026-08-28: stats moved from month-to-date averages to trailing 10-game
+rolling averages.** Previously each team's stats for a game were "this
+team's average for the calendar month the game fell in" — computed from
+`NBAdata/monthly_stats/`. As of this change, each team's stats for a game
+are **that team's average over its own last 10 games, using only games
+strictly before this one** — computed by:
+1. `scripts/data_pull/team_game_logs_pull.py` — pulls per-game team box
+   scores (Base + Advanced) for every season into `NBAdata/team_game_logs/`.
+2. `scripts/data_prep/build_rolling_team_stats.py` — turns that into trailing
+   rolling averages per team per game (`NBAdata/rolling_stats/`), using
+   `.shift(1)` before `.rolling(10)` so a game's own stats can never leak
+   into its own average. A team needs at least 3 prior games before a row
+   gets real numbers (fewer than that → `NaN` → dropped from training, same
+   as any other missing feature).
+
+This fixes two things that were previously open issues (see
+`COMPONENTS.md`, "Known issues"): the residual month-level leakage (a game's
+own box score no longer contributes to the average it's compared against),
+and the lack of "recent form" signal (a team's last 10 games reflects who's
+hot/cold/injured/traded much better than a whole month blended together).
 
 The combined training table is assembled by
 `build_historical_training_dataset()`, which joins each season's game list
-(`NBAdata/matchups/`) to that season's monthly team-stats file
-(`NBAdata/monthly_stats/`) and saves the result to
-`NBAdata/NBA_Training_Matchups_2019_2025.csv`.
+(`NBAdata/matchups/`) to that season's rolling-stats file
+(`NBAdata/rolling_stats/nba_team_rolling_stats_<season>.csv`) **on the
+game's own `GAME_ID`** (an exact join — both files share the same NBA game
+IDs, replacing the old fuzzy `(Team, Season, Month)` join), and saves the
+result to `NBAdata/NBA_Training_Matchups_2019_2025.csv`.
 
 ### The "Team1 / Team2" convention
 
@@ -57,9 +81,12 @@ stats, plus the one home-court flag: 10 + 10 + 1 = 21. These are defined in
 
 ### The 10 per-team stats (each provided for Team1 and Team2)
 
+All 10 are now **trailing 10-game averages** (see §2), not season-to-date or
+month-to-date averages.
+
 | Feature name | What it measures (plain language)                                                                                                                                   | Source column |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `W_PCT`      | **Win percentage** — the team's win rate so far.                                                                                                                    | `W_PCT`       |
+| `W_PCT`      | **Win percentage** — the team's win rate **over its last 10 games** (not season-to-date — see the callout below).                                                  | `W_PCT`       |
 | `PIE`        | **Player Impact Estimate** — the share of everything good in a game (points, rebounds, assists, steals…) the team accounts for. A single "how good overall" number. | `PIE`         |
 | `eFG%`       | **Effective field-goal %** — shooting accuracy that gives extra credit for 3-pointers being worth more.                                                             | `EFG_PCT`     |
 | `TOV%`       | **Turnover %** — how often possessions are lost to turnovers (lower is better).                                                                                     | `TM_TOV_PCT`  |
@@ -73,19 +100,26 @@ stats, plus the one home-court flag: 10 + 10 + 1 = 21. These are defined in
 The four shooting/possession stats (`eFG%`, `TOV%`, `ORB%`, `FTR`) are the
 well-known **"Four Factors"** of basketball — the aspects of play most tied to
 winning. `W_PCT` and `PIE` add overall quality. `NetRtg`, `OffRtg`, `DefRtg`,
-and `Pace` were added on 2026-07-28 to test whether pace/efficiency stats carry
+and `Pace` were added on 2026-08-28 to test whether pace/efficiency stats carry
 signal the Four Factors + PIE don't; `NetRtg` is exactly `OffRtg − DefRtg`, so
 it's redundant with the other two, but kept anyway since it's free (already in
 the pulled data) and tree-based models handle redundant features fine. See §5
 for whether this actually helped.
 
+> **`W_PCT` semantics changed on 2026-08-28.** Before the rolling-window
+> rebuild (§2), `W_PCT` was season-cumulative win percentage. It's now a
+> trailing win rate over the last 10 games instead — same column name,
+> different meaning. Noted here so it doesn't read as a bug later.
+
 > Implementation detail: the "source column" names above can vary slightly
 > between stat files (e.g. `W_PCT` vs `W_PCT_base`). `resolve_stat_columns()` in
 > `features.py` maps each model-facing name to whichever column actually exists
 > in a given file, so the contract stays stable even if the raw data's column
-> names differ. `FTR` is currently sourced from the `FT_PCT` column (a known
-> approximation, not true free-throw rate `FTA/FGA` — see the "How to improve
-> accuracy" section).
+> names differ. `FTR` is still sourced from the `FT_PCT` column (a known
+> approximation, not true free-throw rate `FTA/FGA`) — the rolling-window
+> rebuild pulls raw `FTA`/`FGA` per game already, so fixing this is now cheap,
+> but it's a deliberately separate, not-yet-done change (see "How to improve
+> accuracy") so any future accuracy shift can be attributed to it specifically.
 
 ### The 1 game-context feature
 
@@ -119,9 +153,12 @@ python scripts/modeling/decision_tree_training.py
 
 ### Step 1 — Build & clean the dataset
 
-Join games to team stats for all seven seasons (above), then **drop any row
-missing one of the 21 features or the outcome** (`dropna`). The prediction
-target is `Team1Win` (1 = Team1 won).
+Join games to each team's trailing rolling stats for all seven seasons (§2),
+on the game's own `GAME_ID`, then **drop any row missing one of the 21
+features or the outcome** (`dropna`). Most drops now happen at the very start
+of each team's season, before it has 3 prior games to average — roughly 2-4%
+of rows per season, down from a much higher month-granularity drop rate. The
+prediction target is `Team1Win` (1 = Team1 won).
 
 ### Step 2 — Split into train and test
 
@@ -186,24 +223,31 @@ Accuracy only means something compared to a baseline. The script logs two:
 - **Majority-class baseline (~0.53):** always guess the more common outcome.
 - **Home-team-always-wins baseline (~0.55):** always pick the home team.
 
-The trained models land around **0.60–0.61**. So the model beats "just pick the
-home team" by roughly **5 percentage points**. That gap is real but modest —
-single NBA games are inherently close to a coin flip, and month-level team
-averages only carry so much signal. All six models cluster near 0.60, which
-tells us we're bumping against an **information ceiling in the features**, not a
-weakness of any one algorithm.
+Historically (month-to-date averages) the trained models landed around
+**0.60–0.61** — beating "just pick the home team" by roughly 5 points.
+**As of the 2026-08-28 rolling-window rebuild (§2), that changed for real:**
 
-> The current production winner is **Random Forest** (~0.615 cross-val, ~0.598
-> test), but the winner changes from run to run — across recent retrains it's been
-> Bagging SVC, XGBoost, and Random Forest, all separated by less than the
-> run-to-run noise.
+> **2026-08-28 — rolling-window rebuild.** Replacing month-to-date averages
+> with trailing 10-game rolling averages moved the winning model from
+> **Random Forest (0.615 cross-val / 0.598 test)** to **Logistic Regression
+> (0.625 cross-val / 0.631 test)** — a genuine, above-noise-band improvement
+> (+1.0pt cross-val, +3.3pt test), not the wash the `NetRtg`/`Pace` addition
+> was two commits earlier. The gap over the home-court baseline (0.554) is now
+> roughly **7.7 points**, up from ~4.6. This confirms the diagnosis in §6: the
+> ceiling was about **time resolution**, not stat variety or model choice —
+> the same 4 stat-variety experiment (NetRtg/OffRtg/DefRtg/Pace) that did
+> nothing at month granularity is now part of a feature set that measurably
+> works once it reflects recent form instead of a month blend.
 >
-> **2026-07-28:** added `NetRtg`/`OffRtg`/`DefRtg`/`Pace` (see §3) as an
-> experiment — cross-val moved from 0.611 to 0.615 and test moved from 0.600 to
-> 0.598, both inside the existing noise band. Net effect: no measurable change.
-> Kept anyway (free features, no cost), but this confirms the ceiling is about
-> **time resolution** (month-to-date vs. recent form), not stat variety — see
-> Lever 1 below.
+> Logistic Regression winning this run — after tree-based models (Random
+> Forest, Bagging SVC, XGBoost) had traded the top spot across recent
+> retrains — is worth watching on future retrains rather than reading too
+> much into from one run; per §6, the models have always clustered tightly
+> enough that the specific winner isn't very meaningful on its own.
+>
+> Before this: all six models clustered near 0.60 — a sign of an information
+> ceiling in the *features*, not a weakness of any one algorithm. That
+> reasoning is what motivated the rebuild; see §6.
 
 ---
 
@@ -219,16 +263,15 @@ by expected payoff.
 
 ### Lever 1 — Richer features (by far the biggest opportunity)
 
-Right now each team is described by 6 month-to-date season averages. Real games
-turn on things those averages miss:
+> ✅ **Done (2026-08-28): recent form via rolling windows.** Each team's 10
+> stats are now trailing 10-game averages instead of month-to-date (§2) — see
+> §5 for the accuracy result. The items below are what's still open.
+
+Real games turn on other things the current 10 stats still miss:
 
 - **Rest & schedule fatigue:** days of rest, back-to-back games, games in the
   last 7 days, travel distance / time-zone changes. Tired teams underperform —
   this is well-known predictive signal we currently ignore entirely.
-- **Recent form (rolling windows):** use each team's stats over its **last
-  N games** instead of a whole-month/season average. A season average blends a
-  team's October and April selves together; a last-10-games window captures who's
-  hot, who's slumping, and implicitly reflects injuries and trades.
 - **Player availability / injuries:** is a star playing tonight? Even a simple
   "is the top-minutes player active" flag can matter a lot.
 - **Opponent-adjusted stats & strength of schedule:** a 55% win rate against
@@ -254,10 +297,22 @@ turn on things those averages miss:
   games. For something that plays out over time, the honest test is **train on
   earlier games, test on later ones** — that's how the model is actually used
   (predicting future games). A random split can leak subtle future information
-  and flatter the score.
-- **Watch early-season noise.** A "month-to-date" average after 3 games is very
-  noisy. Down-weighting or excluding the earliest games of each season can stop
-  that noise from confusing training.
+  and flatter the score. **Diagnosed, not yet the default:** a one-off
+  chronological-split test (train on the earlier ~80% of dates, test on the
+  rest) was run against the pre-rebuild model and came back *slightly higher*
+  than the random split (61.4% vs. 60.0%) — so the random split wasn't
+  flattering the score at the time. Worth re-running against the current
+  rolling-window model to confirm that still holds, but it's not urgent.
+- **Watch early-season noise.** Partially addressed by the rolling-window
+  rebuild's `MIN_GAMES_IN_WINDOW=3` threshold, which drops a team's first
+  couple of games each season rather than averaging over too little history —
+  but this is a hard cutoff, not the down-weighting this lever originally
+  suggested.
+- **Fix `FTR` to be true free-throw rate.** Currently sourced from `FT_PCT`
+  (see §3's callout), not `FTA/FGA`. Cheap now that raw `FTA`/`FGA` are
+  pulled per-game anyway (`NBAdata/team_game_logs/`) — deliberately not done
+  yet, so a future retrain's accuracy change can be attributed to this
+  specifically, not conflated with the rolling-window rebuild.
 
 ### Lever 4 — Model-side tweaks (smaller payoff, since the models already tie)
 
@@ -271,11 +326,12 @@ turn on things those averages miss:
 ### A realistic ceiling
 
 Single NBA games are genuinely close to coin flips. Even professional models that
-use betting-market data top out around **65–70%**. Landing at 0.61 on team
-box-score averages is a reasonable result — and the honest way to judge any change
-is against the **home-court baseline (0.554)**, using the same cross-validation,
-remembering the score naturally wobbles by **±1–1.5 points** run to run. Chase
-changes that clear that noise band, not ones inside it.
+use betting-market data top out around **65–70%**. Landing at 0.63 on rolling
+team box-score averages (up from 0.61 pre-rebuild) is a solid result — and the
+honest way to judge any future change is against the **home-court baseline
+(0.554)**, using the same cross-validation, remembering the score naturally
+wobbles by **±1–1.5 points** run to run. Chase changes that clear that noise
+band, not ones inside it.
 
 > One deliberate exclusion: **betting odds / point spreads** would boost accuracy
 > a lot, but they're essentially the market's own prediction — using them is a
@@ -286,13 +342,22 @@ changes that clear that noise band, not ones inside it.
 
 ## 7. Where everything lives
 
-| Thing                                   | Path                                                                                                 |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Training script                         | `scripts/modeling/decision_tree_training.py`                                                         |
-| Feature contract (shared with serving)  | `scripts/modeling/features.py`                                                                       |
-| MLflow / registry settings              | `scripts/modeling/mlflow_config.py`                                                                  |
-| Raw data (DVC-tracked)                  | `NBAdata/matchups/`, `NBAdata/archive/historical/monthly_stats/`                                     |
-| Current-season stats (git-tracked)      | `NBAdata/monthly_stats/`                                                                              |
-| Combined training set (generated)       | `NBAdata/NBA_Training_Matchups_2019_2025.csv`                                                        |
-| Saved model + scaler (serving fallback) | `NBAdata/best_model.pkl`, `NBAdata/scaler.pkl`                                                       |
-| Experiment tracking UI                  | `mlflow ui --backend-store-uri sqlite:///mlflow.db` → [http://localhost:5000](http://localhost:5000) |
+| Thing                                       | Path                                                                                                 |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Training script                              | `scripts/modeling/decision_tree_training.py`                                                         |
+| Feature contract (shared with serving)       | `scripts/modeling/features.py`                                                                       |
+| MLflow / registry settings                   | `scripts/modeling/mlflow_config.py`                                                                  |
+| Per-game team box score pull                 | `scripts/data_pull/team_game_logs_pull.py`                                                           |
+| Rolling-window feature builder               | `scripts/data_prep/build_rolling_team_stats.py`                                                      |
+| Current-form snapshot builder (for serving)  | `scripts/data_prep/build_current_rolling_snapshot.py`                                                |
+| Raw data (DVC-tracked)                       | `NBAdata/matchups/`, `NBAdata/team_game_logs/`, `NBAdata/rolling_stats/nba_team_rolling_stats_*.csv` |
+| Current-form snapshot (git-tracked)          | `NBAdata/rolling_stats/nba_team_current_rolling_stats_*.csv`                                         |
+| Combined training set (generated)            | `NBAdata/NBA_Training_Matchups_2019_2025.csv`                                                        |
+| Saved model + scaler (serving fallback)      | `NBAdata/best_model.pkl`, `NBAdata/scaler.pkl`                                                       |
+| Experiment tracking UI                       | `mlflow ui --backend-store-uri sqlite:///mlflow.db` → [http://localhost:5000](http://localhost:5000) |
+
+Note: `NBAdata/monthly_stats/` and `NBAdata/archive/historical/monthly_stats/`
+(the old month-granularity data) still exist on disk but are no longer read by
+the pipeline — left in place rather than deleted, same reasoning as leaving
+`nba_api_pull.py`/`NBA_Team_Boxscores_2024_25.csv` alone when they were
+superseded.

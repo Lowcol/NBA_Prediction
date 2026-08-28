@@ -14,9 +14,9 @@ from fastapi.testclient import TestClient
 import main
 
 # The 2025-04-01 slate the tests use maps to the 2024-25 season. The predict endpoint
-# now consults collect_monthly_files() to check the season is provisioned (and to fall
-# back to the latest season otherwise), so the mock must list that season as on file.
-# The path value is never read because load_team_stats is itself mocked.
+# now consults collect_rolling_snapshot_files() to check the season is provisioned (and
+# to fall back to the latest season otherwise), so the mock must list that season as on
+# file. The path value is never read because load_team_stats is itself mocked.
 AVAILABLE_SEASONS = {"2024_25": Path("unused.csv")}
 
 
@@ -44,12 +44,11 @@ class FakePredictorAwayWin:
 
 
 def make_stats_df(include_all_stats: bool = True) -> pd.DataFrame:
-    """Two teams with April (month 4) stats. Column names are the source names
-    resolve_stat_columns expects."""
+    """Snapshot-shaped: one row per team, no Month column. Column names are the
+    source names resolve_stat_columns expects."""
     row = {
         "TEAM_NAME": ["denver nuggets", "miami heat"],
         "Season": ["2024-25", "2024-25"],
-        "Month": [4, 4],
         "W_PCT": [0.7, 0.4],
         "PIE": [0.55, 0.45],
         "EFG_PCT": [0.54, 0.51],
@@ -69,7 +68,7 @@ def make_stats_df(include_all_stats: bool = True) -> pd.DataFrame:
 def client(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df())
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
     with TestClient(main.app) as c:
         yield c
 
@@ -105,7 +104,7 @@ def test_predict_missing_features_returns_422(monkeypatch):
     # Stats file is missing the FT_PCT column -> the FTR feature can't be built.
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df(include_all_stats=False))
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -117,7 +116,7 @@ def test_predict_missing_features_returns_422(monkeypatch):
 def test_predict_without_proba_returns_null_probability(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictorNoProba())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df())
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -138,7 +137,7 @@ def test_predict_malformed_body_returns_422(client):
 def test_predict_away_team_win(monkeypatch):
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictorAwayWin())
     monkeypatch.setattr(main, "load_team_stats", lambda season_key: make_stats_df())
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -154,7 +153,7 @@ def test_predict_missing_season_returns_503(monkeypatch):
 
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", raise_missing)
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -175,7 +174,7 @@ def test_predict_falls_back_to_latest_season_when_target_missing(monkeypatch):
 
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
     monkeypatch.setattr(main, "load_team_stats", record_season)
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: AVAILABLE_SEASONS)
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: AVAILABLE_SEASONS)
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -188,7 +187,7 @@ def test_predict_falls_back_to_latest_season_when_target_missing(monkeypatch):
 def test_predict_no_stats_files_returns_503(monkeypatch):
     # Nothing provisioned at all -> 503, not a fallback (there's nothing to fall back to).
     monkeypatch.setattr(main, "load_predictor", lambda: FakePredictor())
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: {})
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: {})
     with TestClient(main.app) as c:
         resp = c.post(
             "/predict",
@@ -202,7 +201,7 @@ def test_health_reports_degraded_when_model_fails_to_load(monkeypatch):
         raise RuntimeError("no model available")
 
     monkeypatch.setattr(main, "load_predictor", raise_no_model)
-    monkeypatch.setattr(main, "collect_monthly_files", lambda: {})
+    monkeypatch.setattr(main, "collect_rolling_snapshot_files", lambda: {})
     with TestClient(main.app) as c:
         resp = c.get("/health")
     assert resp.status_code == 200

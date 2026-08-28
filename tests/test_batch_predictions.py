@@ -42,32 +42,19 @@ def test_games_on_date_filters_and_builds_home_away_names():
     assert row["Team2"] == "miami heat"
 
 
-def test_latest_team_stat_row_prefers_exact_month():
+def test_latest_team_stat_row_returns_the_teams_row():
+    # The snapshot holds one current row per team already, so this is a plain lookup.
     stats_df = pd.DataFrame({
-        "TEAM_NAME": ["denver nuggets", "denver nuggets"],
-        "Month": [10, 11],
-        "PIE": [0.5, 0.6],
+        "TEAM_NAME": ["denver nuggets", "miami heat"],
+        "PIE": [0.6, 0.5],
     })
-    row = latest_team_stat_row(stats_df, "denver nuggets", 11, ["PIE"])
-    assert row["PIE"] == 0.6
-
-
-def test_latest_team_stat_row_falls_back_when_exact_month_missing():
-    # Months cross the season boundary (Dec=12 then Mar=3); the chronologically-latest
-    # usable month is March, not December, so a plain numeric sort would pick the wrong row.
-    stats_df = pd.DataFrame({
-        "TEAM_NAME": ["denver nuggets", "denver nuggets", "denver nuggets"],
-        "Month": [12, 3, 4],
-        "PIE": [0.5, 0.6, None],
-    })
-    row = latest_team_stat_row(stats_df, "denver nuggets", 4, ["PIE"])
-    assert row["Month"] == 3
+    row = latest_team_stat_row(stats_df, "denver nuggets", ["PIE"])
     assert row["PIE"] == 0.6
 
 
 def test_latest_team_stat_row_returns_none_for_unknown_team():
-    stats_df = pd.DataFrame({"TEAM_NAME": ["denver nuggets"], "Month": [10], "PIE": [0.5]})
-    assert latest_team_stat_row(stats_df, "phantom team", 10, ["PIE"]) is None
+    stats_df = pd.DataFrame({"TEAM_NAME": ["denver nuggets"], "PIE": [0.5]})
+    assert latest_team_stat_row(stats_df, "phantom team", ["PIE"]) is None
 
 
 def test_season_label_for_date_january_belongs_to_prior_start_year():
@@ -91,13 +78,12 @@ def test_games_on_date_returns_empty_when_no_games_scheduled():
 
 
 def test_latest_team_stat_row_returns_none_when_all_rows_are_nan():
-    # Team is present but every month's stat is missing -> no usable row.
+    # Team is present but its stat is missing -> no usable row.
     stats_df = pd.DataFrame({
-        "TEAM_NAME": ["denver nuggets", "denver nuggets"],
-        "Month": [10, 11],
-        "PIE": [None, None],
+        "TEAM_NAME": ["denver nuggets"],
+        "PIE": [None],
     })
-    assert latest_team_stat_row(stats_df, "denver nuggets", 11, ["PIE"]) is None
+    assert latest_team_stat_row(stats_df, "denver nuggets", ["PIE"]) is None
 
 
 def test_load_predictor_returns_registry_model_when_available(monkeypatch):

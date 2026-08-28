@@ -1,0 +1,5 @@
+outs:
+- md5: f62c14c31a1e7cd7f248fb60ef5dd59a
+  size: 403958
+  hash: md5
+  path: nba_team_rolling_stats_2024_25.csv

@@ -22,7 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "serving" / "inference"))
 from features import SELECTED_FEATURES, resolve_stat_columns  # noqa: E402
 from predictor import (  # noqa: E402
     assemble_features,
-    collect_monthly_files,
+    collect_rolling_snapshot_files,
     load_predictor,
     load_team_stats,
     predict_from_features,
@@ -56,7 +56,7 @@ def index() -> FileResponse:
 @app.get("/health")
 def health() -> dict:
     model_loaded = getattr(app.state, "predictor", None) is not None
-    stats_available = season_label_for_date(date.today()).replace("-", "_") in collect_monthly_files()
+    stats_available = season_label_for_date(date.today()).replace("-", "_") in collect_rolling_snapshot_files()
     return {
         "status": "ok" if model_loaded else "degraded",
         "model_loaded": model_loaded,
@@ -71,16 +71,17 @@ def predict(req: PredictRequest) -> PredictResponse:
     target = req.date or date.today()
     season_key = season_label_for_date(target).replace("-", "_")
 
-    # If the target date's season has no stats file (e.g. the current season isn't
+    # If the target date's season has no snapshot file (e.g. the current season isn't
     # provisioned yet), fall back to the most recent season on file so the UI's
     # date-less "just pick two teams" request still returns a prediction.
-    available = collect_monthly_files()
+    available = collect_rolling_snapshot_files()
     if season_key not in available:
         if not available:
             raise HTTPException(
                 status_code=503,
-                detail="No monthly stats files are provisioned. Run the data_pull + "
-                "merge_advanced_base_stats.py scripts (or `dvc pull`) first.",
+                detail="No current rolling-stats snapshots are provisioned. Run the data_pull + "
+                "build_rolling_team_stats.py + build_current_rolling_snapshot.py scripts "
+                "(or `dvc pull`) first.",
             )
         season_key = max(available)  # keys look like "2024_25"; max() is the latest season
 
@@ -92,7 +93,7 @@ def predict(req: PredictRequest) -> PredictResponse:
     resolved_map, selected_cols = resolve_stat_columns(stats_df.columns)
     resolved_cols = [c for c in selected_cols if c not in ("TEAM_NAME", "Season", "Month")]
 
-    features = assemble_features(stats_df, resolved_map, resolved_cols, home, away, target.month)
+    features = assemble_features(stats_df, resolved_map, resolved_cols, home, away)
     if features is None:
         raise HTTPException(
             status_code=404,
