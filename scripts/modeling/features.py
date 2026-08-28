@@ -15,7 +15,6 @@ STAT_MAP: dict[str, list[str]] = {
     "OffRtg": ["OFF_RATING"],
     "DefRtg": ["DEF_RATING"],
     "Pace": ["PACE"],
-    "RestDays": ["RestDays"],
     "B2B": ["B2B"],
 }
 
@@ -32,7 +31,6 @@ SELECTED_FEATURES = [
     "Team1_OffRtg",
     "Team1_DefRtg",
     "Team1_Pace",
-    "Team1_RestDays",
     "Team1_B2B",
     "Team2_PIE",
     "Team2_eFG%",
@@ -43,7 +41,6 @@ SELECTED_FEATURES = [
     "Team2_OffRtg",
     "Team2_DefRtg",
     "Team2_Pace",
-    "Team2_RestDays",
     "Team2_B2B",
 ]
 

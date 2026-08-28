@@ -7,6 +7,38 @@ behind it. Read this first when resuming work after a context gap.
 
 ---
 
+## SHAP audit + drop RestDays (2026-08-28)
+
+**Status: done, committed pending user go-ahead.**
+
+Built `scripts/modeling/feature_importance.py` — treats `@production` as a
+black box (`shap.Explainer` on `predict_proba`, permutation backend, works
+regardless of which of the 6 models is winning). `shap` isn't in
+`requirements.txt` — installing it force-upgraded numpy to 2.x, conflicting
+with the pinned `numpy==1.26.4` the rest of the stack needs. Ran it, then
+restored `numpy==1.26.4` afterward; the script needs `pip install shap` run
+separately by whoever reruns it.
+
+Findings: `RestDays` (continuous) dead last of 25 features by a wide margin;
+`B2B` (binary) ranked mid-table, 10-20x higher. Validates the non-linear
+"rest matters as a threshold, not a gradient" hypothesis. Also flagged
+`NetRtg` as likely redundant with `OffRtg`/`DefRtg` (exact linear
+relationship, uneven SHAP credit-splitting across the three) — user chose
+to keep it, only asked to drop `RestDays`.
+
+Removed `RestDays` from `features.py` (kept `B2B`). Simplified
+`predictor.py`: `rest_days_and_b2b()` → `is_back_to_back()`, returns just
+the flag — the `REST_DAYS_CAP` clamp was only ever needed to keep the
+*numeric* RestDays sane (season-openers), and turned out to have zero
+effect on the B2B boolean either way, so dropped along with its now-unused
+import. 25 → 23 features. `@production` v9: CV 0.629 / test 0.630 —
+unchanged within noise, as expected given the audit's finding.
+
+Verified: full suite (59/59), retrain end-to-end, Docker rebuild + live
+`/health`/`/predict` smoke test.
+
+---
+
 ## Rest days / back-to-back feature (2026-08-28)
 
 **Status: done, verified. Not committed yet.**

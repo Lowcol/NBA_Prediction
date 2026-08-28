@@ -36,9 +36,9 @@ home team, so the model's output reads directly as "probability home team wins."
 
 ---
 
-## 3. The features (21 inputs)
+## 3. The features (23 inputs)
 
-10 per-team stats × 2 teams + 1 home-court flag. Each stat is a trailing
+11 per-team stats × 2 teams + 1 home-court flag. Each stat is a trailing
 10-game average.
 
 | Feature | Meaning | Source |
@@ -53,13 +53,14 @@ home team, so the model's output reads directly as "probability home team wins."
 | `OffRtg` | Offensive rating | `OFF_RATING` |
 | `DefRtg` | Defensive rating | `DEF_RATING` |
 | `Pace` | Possessions per 48 min | `PACE` |
-| `RestDays` | Days of rest before this game (capped at 5) | `RestDays`* |
 | `B2B` | 1 if back-to-back (0 rest) | `B2B`* |
 
-`eFG%`/`TOV%`/`ORB%`/`FTR` are the classic "Four Factors." `RestDays`/`B2B`
-are the one pair that isn't a rolling average — they're computed dynamically
-at prediction time from the target game's date vs. the team's last known
-game (`predictor.py`'s `rest_days_and_b2b()`), not snapshotted like the rest.
+`eFG%`/`TOV%`/`ORB%`/`FTR` are the classic "Four Factors." `B2B` isn't a
+rolling average like the rest — computed dynamically at prediction time
+from the target game's date vs. the team's last known game (`predictor.py`'s
+`is_back_to_back()`), not snapshotted. A SHAP audit (2026-08-28) found the
+continuous rest-day count carried almost no weight vs. `B2B`'s much larger
+effect, so the count was dropped and only the binary flag kept — see §6.
 
 Full ordered list lives in `features.py`'s `SELECTED_FEATURES`. Post-game
 info (final score, plus/minus) is deliberately excluded — that would be
@@ -98,6 +99,7 @@ Two baselines: majority-class (~0.52) and home-team-always-wins (~0.55).
 | + FTR fix (true `FTA/FGA`) | 0.628 | 0.626 |
 | + chronological split | 0.627 | 0.624 |
 | + rest days / back-to-back | 0.628 | 0.631 |
+| + SHAP audit: drop `RestDays`, keep `B2B` | 0.629 | 0.630 |
 
 The rolling-window switch was the one real, above-noise-band gain (+3pt
 test). Everything since has landed inside the run-to-run noise band
@@ -126,6 +128,12 @@ signal, not algorithm choice. Ordered by expected payoff:
 **Lever 2 — better use of existing features.**
 - Feed `Team1_stat − Team2_stat` differences instead of raw pairs
 - League-relative stats (normalize by season/era)
+- ✅ SHAP audit (2026-08-28, `scripts/modeling/feature_importance.py`,
+  needs `pip install shap` separately — not a pinned dependency, conflicts
+  with `requirements.txt`'s `numpy` pin): dropped the continuous `RestDays`
+  (negligible importance, `B2B` alone carries the rest-fatigue signal).
+  `NetRtg` flagged as a possible prune too (redundant with `OffRtg`/`DefRtg`
+  by definition) but kept — worth another look if features keep growing.
 
 **Lever 3 — evaluation honesty.**
 - ✅ Chronological split

@@ -2,6 +2,17 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-08-28 — SHAP audit: dropped `RestDays`, kept `B2B`
+
+Ran a SHAP feature-importance audit (`scripts/modeling/feature_importance.py`,
+needs `pip install shap` separately) on `@production`. Found `RestDays`
+(continuous) had negligible importance vs. `B2B`'s much larger effect —
+confirms rest matters as a threshold (0 rest, yes/no), not a smooth
+gradient. Dropped `RestDays` as a feature, kept `B2B`: 25 → 23 features.
+`NetRtg` also flagged as redundant with `OffRtg`/`DefRtg` by the same audit
+but kept (user's call). `@production` v9: CV 0.629 / test 0.630, unchanged
+within noise.
+
 ## 2026-08-28 — Rest days / back-to-back feature
 
 `RestDays` (capped at 5) + `B2B` added — 21 → 25 features. Computed from

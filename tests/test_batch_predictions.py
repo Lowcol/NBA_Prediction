@@ -134,32 +134,24 @@ def test_build_feature_row_prefixes_home_and_away_correctly():
         "Team2_W_PCT": 0.4,
         "Team1_PIE": 0.55,
         "Team2_PIE": 0.45,
-        "Team1_RestDays": 3.0,
         "Team1_B2B": 0.0,
-        "Team2_RestDays": 2.0,
         "Team2_B2B": 0.0,
     }
 
 
-def test_rest_days_and_b2b_back_to_back():
-    # Last game the day before the target -> 0 days rest, a back-to-back.
-    assert predictor.rest_days_and_b2b("2025-04-01", date(2025, 4, 2)) == (0.0, 1.0)
+def test_is_back_to_back_true_when_played_yesterday():
+    assert predictor.is_back_to_back("2025-04-01", date(2025, 4, 2)) == 1.0
 
 
-def test_rest_days_and_b2b_normal_gap():
-    # 4 calendar days between games -> 3 full rest days, not a back-to-back.
-    assert predictor.rest_days_and_b2b("2025-03-28", date(2025, 4, 1)) == (3.0, 0.0)
+def test_is_back_to_back_false_with_a_normal_gap():
+    assert predictor.is_back_to_back("2025-03-28", date(2025, 4, 1)) == 0.0
 
 
-def test_rest_days_and_b2b_caps_long_gaps():
-    # A season-opener-sized gap (months) must clip to REST_DAYS_CAP, not be
-    # treated as literally that many days of extra rest.
-    rest_days, b2b = predictor.rest_days_and_b2b("2025-06-01", date(2025, 10, 21))
-    assert rest_days == predictor.REST_DAYS_CAP
-    assert b2b == 0.0
+def test_is_back_to_back_false_for_a_season_opener_sized_gap():
+    assert predictor.is_back_to_back("2025-06-01", date(2025, 10, 21)) == 0.0
 
 
-def test_rest_days_and_b2b_clamps_same_day_to_zero_not_negative():
+def test_is_back_to_back_true_for_a_stale_or_same_day_snapshot():
     # A stale snapshot whose last known game is on (or after) the target date
-    # must not produce a negative rest value.
-    assert predictor.rest_days_and_b2b("2025-04-01", date(2025, 4, 1)) == (0.0, 1.0)
+    # is at least as fatigued as a real back-to-back, not less.
+    assert predictor.is_back_to_back("2025-04-01", date(2025, 4, 1)) == 1.0

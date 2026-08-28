@@ -69,7 +69,7 @@ to the local pkls if the registry isn't reachable. Shared config:
 - `stats.nba.com` blocks some cloud/datacenter networks — run pulls from a normal network if they fail.
 
 **2. Data prep** (`scripts/data_prep/`)
-- `build_rolling_team_stats.py` — per-game box scores → trailing 10-game rolling averages (leakage-free by construction) + `RestDays`/`B2B` (calendar gap since the team's true previous game, any SeasonType, capped at 5 days). See `TRAINING.md` §2.
+- `build_rolling_team_stats.py` — per-game box scores → trailing 10-game rolling averages (leakage-free by construction) + `RestDays`/`B2B` (calendar gap since the team's true previous game, any SeasonType, capped at 5 days — `RestDays` itself isn't a model feature as of a 2026-08-28 SHAP audit, only `B2B` is; kept as a data column anyway). See `TRAINING.md` §2.
 - `build_current_rolling_snapshot.py` — condenses that to one "current form" row per team for serving. Falls back to the team's last valid row from the *previous* season if it has none yet this season (see "Known issues").
 - `merge_advanced_base_stats.py` — superseded, left unreferenced.
 
@@ -81,7 +81,7 @@ to the local pkls if the registry isn't reachable. Shared config:
 
 **4. Batch** (`serving/batch/run_nightly_predictions.py`)
 - Fetches the day's schedule (`ScheduleLeagueV2`), looks up each team's current-form snapshot, predicts, writes `NBAdata/predictions/predictions_<date>.csv`.
-- `RestDays`/`B2B` are computed dynamically from the snapshot's `GAME_DATE` vs. the target date — so `--date <past>` reflects rest as of that date, but the other 10 stats still reflect the snapshot's *latest* refresh, not that historical date (see "Known issues").
+- `B2B` (the only rest-related model feature) is computed dynamically from the snapshot's `GAME_DATE` vs. the target date — so `--date <past>` reflects back-to-back status as of that date, but the other 10 stats still reflect the snapshot's *latest* refresh, not that historical date (see "Known issues").
 - Run: `python serving/batch/run_nightly_predictions.py [--date YYYY-MM-DD]`
 - Docker: code-only image, `NBAdata/` mounted at runtime (`MSYS_NO_PATHCONV=1` on Windows Git Bash).
 
@@ -114,5 +114,5 @@ CI (`.github/workflows/ci.yml`): `dvc pull` + pytest + `docker build` on every p
 - **Data leakage (fixed 2026-07-15):** `PTS`/`PLUS_MINUS` were pulled from completed games and used as input features. Removed; `Team1Home` added as a real pregame feature.
 - **Month-level leakage (fixed 2026-08-28):** stats used to be joined at month granularity, including the target game's own contribution. Fixed by the rolling-window rebuild (exact `GAME_ID` join, strictly-prior-games averages).
 - **Season mislabeling (fixed 2026-07-16, path since superseded):** `merge_advanced_base_stats.py` once hardcoded `season="2019-20"`, silently dropping 5 of 6 seasons via the `(Team,Season,Month)` join. Fixed, then the whole path was superseded by the `GAME_ID` join, which has no such labeling step to break.
-- **Snapshot isn't date-bounded (since 2026-08-28):** the current-form snapshot always holds each team's *most recent* stats, not "as of a specific past date." Correct for live serving; means `--date <past>` no longer doubles as point-in-time backtesting for the 10 rolling stats (RestDays/B2B are the exception — computed relative to the given date).
+- **Snapshot isn't date-bounded (since 2026-08-28):** the current-form snapshot always holds each team's *most recent* stats, not "as of a specific past date." Correct for live serving; means `--date <past>` no longer doubles as point-in-time backtesting for the 10 rolling stats (`B2B` is the exception — computed relative to the given date).
 - **Train/serve season-boundary asymmetry (intentional, since 2026-08-28):** training drops a team's under-3-game rows at a season's start; serving instead carries over that team's last valid row from the previous season, since it must return something for every team at all times.

@@ -18,9 +18,7 @@ from sklearn.pipeline import Pipeline
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "modeling"))
-sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "data_prep"))
 
-from build_rolling_team_stats import REST_DAYS_CAP  # noqa: E402
 from features import SELECTED_FEATURES  # noqa: E402
 from mlflow_config import PRODUCTION_MODEL_URI, tracking_uri  # noqa: E402
 
@@ -92,17 +90,18 @@ def load_predictor():
         return Pipeline([("scaler", scaler), ("model", model)])
 
 
-def rest_days_and_b2b(last_game_date, target: date) -> tuple[float, float]:
-    """Days of rest before `target`, given a team's snapshotted last known game
-    date. Same cap/semantics as build_rolling_team_stats.py's training-time
-    RestDays/B2B, just evaluated against the actual game being predicted
-    instead of a historical row's own next game -- RestDays isn't a team
-    property that can be snapshotted like the other stats, since it depends on
-    which game is being predicted (see build_current_rolling_snapshot.py).
+def is_back_to_back(last_game_date, target: date) -> float:
+    """Whether `target` is a back-to-back (0, or fewer, rest days) given a
+    team's snapshotted last known game date -- evaluated against the actual
+    game being predicted, not a historical row's own next game, since this
+    isn't a team property that can be snapshotted like the other stats (see
+    build_current_rolling_snapshot.py). RestDays itself isn't a model
+    feature (SHAP audit, 2026-08-28: negligible importance vs. B2B's much
+    larger effect), so only the binary flag is computed here.
     """
     last_date = pd.to_datetime(last_game_date).date()
-    rest_days = max(0, min((target - last_date).days - 1, REST_DAYS_CAP))
-    return float(rest_days), float(rest_days == 0)
+    rest_days = (target - last_date).days - 1
+    return float(rest_days <= 0)
 
 
 def build_feature_row(
@@ -112,8 +111,8 @@ def build_feature_row(
     for model_col, source_col in resolved_map.items():
         row[f"Team1_{model_col}"] = home_row[source_col]
         row[f"Team2_{model_col}"] = away_row[source_col]
-    row["Team1_RestDays"], row["Team1_B2B"] = rest_days_and_b2b(home_row["GAME_DATE"], target)
-    row["Team2_RestDays"], row["Team2_B2B"] = rest_days_and_b2b(away_row["GAME_DATE"], target)
+    row["Team1_B2B"] = is_back_to_back(home_row["GAME_DATE"], target)
+    row["Team2_B2B"] = is_back_to_back(away_row["GAME_DATE"], target)
     return row
 
 
