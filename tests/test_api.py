@@ -55,6 +55,10 @@ def make_stats_df(include_all_stats: bool = True) -> pd.DataFrame:
         "EFG_PCT": [0.54, 0.51],
         "TM_TOV_PCT": [0.12, 0.14],
         "OREB_PCT": [0.25, 0.22],
+        "NET_RATING": [5.5, -3.2],
+        "OFF_RATING": [115.0, 108.5],
+        "DEF_RATING": [109.5, 111.7],
+        "PACE": [99.2, 101.8],
     }
     if include_all_stats:
         row["FT_PCT"] = [0.20, 0.18]  # source column for the FTR feature

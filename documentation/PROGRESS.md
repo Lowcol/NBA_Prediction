@@ -7,6 +7,43 @@ behind it. Read this first when resuming work after a context gap.
 
 ---
 
+## Added efficiency/pace features; investigated eval methodology (2026-07-28)
+
+**Status: code + tests done, retrained (v4), docs updated. Nothing committed yet.**
+
+### Context
+User compared our ~60% test accuracy to the ~68-69% accuracy of picking the betting favorite and asked whether that gap was closable. Walked through why that's not quite apples-to-apples (the market prices in injuries/rest/rosters we don't have), then investigated two concrete levers together before deciding what to build next.
+
+### Diagnostic 1 — chronological vs. random train/test split
+User asked whether the current split (`train_test_split(..., random_state=42, stratify=y)`) is temporal. It isn't — it's a random 80/20 sample across all 7 seasons. Ran a one-off scratch script (not committed, not part of the tracked pipeline) that reused the real `build_model_grids()`/`PROBABILITY_OVERRIDES` but split chronologically (sorted by `DATE`, first 80% train / last 20% test) instead.
+- **Result: no evidence of inflation.** Chronological held-out test accuracy came out *slightly higher* (61.4%) than the random-split number (60.0%). CV accuracy was lower under the chronological split (59.3% vs 61.1%), expected since early CV folds have much less training history.
+- Caveat: single split point, single run — not itself cross-validated across multiple time windows. But it's enough to say the current random-split number isn't misleading anyone.
+- Did not change the tracked pipeline's split method — this was purely a check.
+
+### Diagnostic 2 / build — add NetRtg, OffRtg, DefRtg, Pace as features
+User asked to add net rating, offensive/defensive efficiency, and pace, "if available from the API." Checked: **they already are** — `LeagueDashTeamStats` with `measure_type_detailed_defense='Advanced'` (already the endpoint `monthly_stats_pull.py`/`monthly_team_stat_pull.py` call) returns `OFF_RATING`, `DEF_RATING`, `NET_RATING`, `PACE` for every team/month/season, and they're sitting unused in every `nba_team_combined_stats_*.csv` already on disk for all 7 seasons. No new data pull needed.
+
+**What got built:**
+- `scripts/modeling/features.py` — added 4 entries to `STAT_MAP` (`NetRtg`→`NET_RATING`, `OffRtg`→`OFF_RATING`, `DefRtg`→`DEF_RATING`, `Pace`→`PACE`) and to `SELECTED_FEATURES` (both teams). 13 → 21 features.
+- `tests/test_api.py` — `make_stats_df()` fixture gained the 4 new source columns so the mocked stats resolve all 21 features (was failing 422 without them).
+- Retrained: new `@production` **v4**, still Random Forest, `max_depth=None, min_samples_leaf=10`. CV 0.6147 (was 0.6111), test 0.5981 (was 0.5999) — **both changes are inside the run-to-run noise band, net effect is a wash.**
+- `documentation/TRAINING.md` updated: feature table/count (13→21), Step 1's stale "six seasons" → seven, and a dated note in §5 recording the null result. Also fixed `FTR`'s implementation-detail callout to flag it's not true `FTA/FGA`.
+
+**Decision (asked, not assumed):** kept the 4 new features despite the null result — free (already in the data), no accuracy cost, and doesn't rule out them mattering once combined with a finer time resolution (see below). User chose this over reverting to the simpler 13-feature set.
+
+### What this settles for the next step
+Both experiments point the same direction as the original diagnosis: the ceiling is **time resolution of the stats** (month-to-date average vs. recent form), not which stats or how they're evaluated. The scoped-but-not-started "Part B" plan (trailing N-game rolling windows, replacing the month-level join — see git history / this file's structure for where that plan lives if revisited) is still the next real lever, now with two more data points supporting it.
+
+### Verification performed
+- `python -m pytest tests/ -q`: 44 passed after the feature-count change + fixture update.
+- End-to-end sanity check: loaded `@production` (registry), pulled real 2025-26 stats, called `assemble_features`/`predict_from_features` for Denver vs. Miami — 21 features assembled, prediction + probability returned correctly. Batch job and API needed zero code changes (column resolution is already dynamic via `resolve_stat_columns`).
+
+### Open / not done
+- Nothing committed yet — waiting on explicit "commit this."
+- Part B (trailing rolling-window features, replacing month granularity) not started — still just scoped in conversation, not written anywhere in the repo yet.
+
+---
+
 ## Web UI + probability bug + hyperparameter tuning (out-of-band, 2026-07-24)
 
 **Status: code + tests done; NOT retrained yet — the tuning + probability fixes only take effect when the user re-runs training (which also re-promotes `@production`). Nothing committed.**

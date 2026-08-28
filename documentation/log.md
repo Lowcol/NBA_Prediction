@@ -2,6 +2,16 @@
 
 Snapshot of where the project stands, updated as major changes land. Not a full changelog — see git history for that.
 
+## 2026-07-24 — Web UI, probability fix, hyperparameter tuning, 2025-26 season, self-contained serving
+
+**State: a two-team dropdown UI is served from the API; probabilities are real (not vote counts); all 6 models are tuned via `GridSearchCV`; training now covers 7 seasons (2019-20..2025-26) with Random Forest as the current `@production` model (v3, CV 0.611 / test 0.600); the API and batch job run straight after cloning with no AWS credentials.**
+
+- Added a minimal web UI (`serving/api/static/index.html`, served at `GET /`): two team dropdowns, POSTs to `/predict`, no date field (defaults to today). `/predict` now falls back to the latest season on file when the target date's season has no stats, instead of 503-ing whenever "today" falls in an unplayed season.
+- Fixed a probability bug: the winning model's bagged base `SVC` was missing `probability=True`, so `predict_proba` degraded to counting the 10 SVMs' hard votes (piling at 0%/100%). Fixed, and separately replaced the old hand-picked hyperparameters with `GridSearchCV` (5-fold, small per-model grids) for all 6 models — each grid includes the former hand-set config, so tuning can only match or beat it. Also fixed a latent bug where MLflow's skops serialization refused to save a winning XGBoost model until its types were added to `skops_trusted_types`.
+- Pulled the 2025-26 season (via the existing TLS-bypass pull path) and retrained on all 7 seasons (~8,900 rows). New `@production` v3: **Random Forest** (CV 0.611 / test 0.600), pushed to the DVC S3 remote. `documentation/TRAINING.md` added — plain-language walkthrough of training and the 13 features.
+- Moved `NBAdata/monthly_stats/` (current-season stats) out of DVC and into git, alongside the already-git-tracked `best_model.pkl`/`scaler.pkl` — so a fresh clone can serve predictions with no AWS credentials and no `dvc pull`. Bulk training data (`matchups/`, `archive/`, the combined training CSV) stays in DVC/S3.
+- `docker/Dockerfile.api` now bakes in the model and current-season stats (both git-tracked), making the API image fully self-contained — `docker build` + `docker run`, no volume mount needed. `docker/Dockerfile.batch` is unchanged (still mounts `NBAdata/` at runtime). README and COMPONENTS.md rewritten to lead with the Docker quick-start.
+
 ## 2026-07-22 — Phase 4: real-time FastAPI prediction service + shared inference module
 
 **State: a `/predict` + `/health` API serves live single-game predictions from the same `@production` model the batch job uses.**

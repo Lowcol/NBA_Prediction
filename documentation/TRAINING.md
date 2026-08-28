@@ -20,8 +20,10 @@ It's a yes/no (binary) prediction. The model also returns a probability — e.g.
 ## 2. The data
 
 - **Source:** historical NBA games and monthly team stats pulled from the NBA
-  API, stored as CSVs under `NBAdata/` (tracked with DVC, not committed to git —
-  run `dvc pull` to fetch them).
+  API, stored as CSVs under `NBAdata/`. Most of this (matchups, past-season
+  stats) is tracked with DVC, not committed to git — run `dvc pull` to fetch
+  it. The current season's stats (`NBAdata/monthly_stats/`) are committed
+  straight to git instead, so serving works without a DVC pull.
 - **Seasons:** seven, from **2019-20 through 2025-26**.
 - **Size:** about **8,900 games** total (roughly 1,100–1,300 per season).
 - **One row = one game.** Each row pairs the two teams' season-to-date stats
@@ -47,13 +49,13 @@ Team1 is the home team, 0 otherwise).
 
 ---
 
-## 3. The features (the 13 inputs)
+## 3. The features (the 21 inputs)
 
-Every prediction is based on **13 numbers**. For each team we take 6 season-level
-stats, plus the one home-court flag: 6 + 6 + 1 = 13. These are defined in
+Every prediction is based on **21 numbers**. For each team we take 10 season-level
+stats, plus the one home-court flag: 10 + 10 + 1 = 21. These are defined in
 `features.py` as `SELECTED_FEATURES`.
 
-### The 6 per-team stats (each provided for Team1 and Team2)
+### The 10 per-team stats (each provided for Team1 and Team2)
 
 | Feature name | What it measures (plain language)                                                                                                                                   | Source column |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
@@ -63,16 +65,27 @@ stats, plus the one home-court flag: 6 + 6 + 1 = 13. These are defined in
 | `TOV%`       | **Turnover %** — how often possessions are lost to turnovers (lower is better).                                                                                     | `TM_TOV_PCT`  |
 | `ORB%`       | **Offensive rebound %** — share of available offensive rebounds grabbed (second chances).                                                                           | `OREB_PCT`    |
 | `FTR`        | **Free-throw factor** — how much the team gets to (and converts) the free-throw line.                                                                               | `FT_PCT`      |
+| `NetRtg`     | **Net rating** — points scored minus points allowed, per 100 possessions. The single "are they outscoring opponents, pace-adjusted" number.                        | `NET_RATING`  |
+| `OffRtg`     | **Offensive rating** — points scored per 100 possessions.                                                                                                           | `OFF_RATING`  |
+| `DefRtg`     | **Defensive rating** — points allowed per 100 possessions (lower is better).                                                                                        | `DEF_RATING`  |
+| `Pace`       | **Pace** — possessions per 48 minutes, i.e. how fast the team plays.                                                                                                | `PACE`        |
 
 The four shooting/possession stats (`eFG%`, `TOV%`, `ORB%`, `FTR`) are the
 well-known **"Four Factors"** of basketball — the aspects of play most tied to
-winning. `W_PCT` and `PIE` add overall quality.
+winning. `W_PCT` and `PIE` add overall quality. `NetRtg`, `OffRtg`, `DefRtg`,
+and `Pace` were added on 2026-07-28 to test whether pace/efficiency stats carry
+signal the Four Factors + PIE don't; `NetRtg` is exactly `OffRtg − DefRtg`, so
+it's redundant with the other two, but kept anyway since it's free (already in
+the pulled data) and tree-based models handle redundant features fine. See §5
+for whether this actually helped.
 
 > Implementation detail: the "source column" names above can vary slightly
 > between stat files (e.g. `W_PCT` vs `W_PCT_base`). `resolve_stat_columns()` in
 > `features.py` maps each model-facing name to whichever column actually exists
 > in a given file, so the contract stays stable even if the raw data's column
-> names differ. `FTR` is currently sourced from the `FT_PCT` column.
+> names differ. `FTR` is currently sourced from the `FT_PCT` column (a known
+> approximation, not true free-throw rate `FTA/FGA` — see the "How to improve
+> accuracy" section).
 
 ### The 1 game-context feature
 
@@ -84,8 +97,8 @@ winning. `W_PCT` and `PIE` add overall quality.
 
 ```
 Team1_W_PCT, Team2_W_PCT, Team1Home,
-Team1_PIE,  Team1_eFG%, Team1_TOV%, Team1_ORB%, Team1_FTR,
-Team2_PIE,  Team2_eFG%, Team2_TOV%, Team2_ORB%, Team2_FTR
+Team1_PIE, Team1_eFG%, Team1_TOV%, Team1_ORB%, Team1_FTR, Team1_NetRtg, Team1_OffRtg, Team1_DefRtg, Team1_Pace,
+Team2_PIE, Team2_eFG%, Team2_TOV%, Team2_ORB%, Team2_FTR, Team2_NetRtg, Team2_OffRtg, Team2_DefRtg, Team2_Pace
 ```
 
 **What's deliberately NOT included:** anything only known _after_ the game
@@ -106,8 +119,8 @@ python scripts/modeling/decision_tree_training.py
 
 ### Step 1 — Build & clean the dataset
 
-Join games to team stats for all six seasons (above), then **drop any row
-missing one of the 13 features or the outcome** (`dropna`). The prediction
+Join games to team stats for all seven seasons (above), then **drop any row
+missing one of the 21 features or the outcome** (`dropna`). The prediction
 target is `Team1Win` (1 = Team1 won).
 
 ### Step 2 — Split into train and test
@@ -180,10 +193,17 @@ averages only carry so much signal. All six models cluster near 0.60, which
 tells us we're bumping against an **information ceiling in the features**, not a
 weakness of any one algorithm.
 
-> The current production winner is **Random Forest** (~0.611 cross-val, ~0.600
+> The current production winner is **Random Forest** (~0.615 cross-val, ~0.598
 > test), but the winner changes from run to run — across recent retrains it's been
 > Bagging SVC, XGBoost, and Random Forest, all separated by less than the
 > run-to-run noise.
+>
+> **2026-07-28:** added `NetRtg`/`OffRtg`/`DefRtg`/`Pace` (see §3) as an
+> experiment — cross-val moved from 0.611 to 0.615 and test moved from 0.600 to
+> 0.598, both inside the existing noise band. Net effect: no measurable change.
+> Kept anyway (free features, no cost), but this confirms the ceiling is about
+> **time resolution** (month-to-date vs. recent form), not stat variety — see
+> Lever 1 below.
 
 ---
 
@@ -271,7 +291,8 @@ changes that clear that noise band, not ones inside it.
 | Training script                         | `scripts/modeling/decision_tree_training.py`                                                         |
 | Feature contract (shared with serving)  | `scripts/modeling/features.py`                                                                       |
 | MLflow / registry settings              | `scripts/modeling/mlflow_config.py`                                                                  |
-| Raw data (DVC-tracked)                  | `NBAdata/matchups/`, `NBAdata/monthly_stats/`                                                        |
+| Raw data (DVC-tracked)                  | `NBAdata/matchups/`, `NBAdata/archive/historical/monthly_stats/`                                     |
+| Current-season stats (git-tracked)      | `NBAdata/monthly_stats/`                                                                              |
 | Combined training set (generated)       | `NBAdata/NBA_Training_Matchups_2019_2025.csv`                                                        |
 | Saved model + scaler (serving fallback) | `NBAdata/best_model.pkl`, `NBAdata/scaler.pkl`                                                       |
 | Experiment tracking UI                  | `mlflow ui --backend-store-uri sqlite:///mlflow.db` → [http://localhost:5000](http://localhost:5000) |

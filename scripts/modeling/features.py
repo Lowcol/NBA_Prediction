@@ -11,6 +11,10 @@ STAT_MAP: dict[str, list[str]] = {
     "TOV%": ["TM_TOV_PCT"],
     "ORB%": ["OREB_PCT"],
     "FTR": ["FT_PCT"],
+    "NetRtg": ["NET_RATING"],
+    "OffRtg": ["OFF_RATING"],
+    "DefRtg": ["DEF_RATING"],
+    "Pace": ["PACE"],
 }
 
 SELECTED_FEATURES = [
@@ -22,11 +26,19 @@ SELECTED_FEATURES = [
     "Team1_TOV%",
     "Team1_ORB%",
     "Team1_FTR",
+    "Team1_NetRtg",
+    "Team1_OffRtg",
+    "Team1_DefRtg",
+    "Team1_Pace",
     "Team2_PIE",
     "Team2_eFG%",
     "Team2_TOV%",
     "Team2_ORB%",
     "Team2_FTR",
+    "Team2_NetRtg",
+    "Team2_OffRtg",
+    "Team2_DefRtg",
+    "Team2_Pace",
 ]
 
 

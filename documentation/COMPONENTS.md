@@ -32,7 +32,7 @@ documentation/
   PROGRESS.md      # Working scratchpad: task specs, decisions, open questions
 
 NBAdata/                           # (see "Data (DVC + S3)" below — the training data is not in git)
-  matchups/                        # [DVC] One row per game, per season (2019-20 .. 2024-25)
+  matchups/                        # [DVC] One row per game, per season (2019-20 .. 2025-26)
   monthly_stats/                   # [git] Current-season base/advanced/combined team stats — the model's input at prediction time
   archive/historical/monthly_stats/# [DVC] Past-season monthly stats (2019-20 .. 2023-24), used for training
   predictions/                     # Batch job output, one CSV per predicted slate date
