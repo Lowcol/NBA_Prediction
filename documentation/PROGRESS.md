@@ -7,6 +7,103 @@ behind it. Read this first when resuming work after a context gap.
 
 ---
 
+## Rest days / back-to-back feature (2026-08-28)
+
+**Status: done, verified. Not committed yet.**
+
+Unlike the other 10 stats, `RestDays`/`B2B` aren't rolling averages — they're
+a fact about the gap before *this* game, so they can't be snapshotted. Computed
+in `build_rolling_team_stats.py` (calendar diff vs. the team's true previous
+game, any SeasonType, capped at 5 days; season-openers/no-prior-game just get
+treated as fully rested rather than dropped). Serving computes them
+dynamically at request time (`predictor.py`'s `rest_days_and_b2b()`, given
+the snapshot's `GAME_DATE` + the target date) — this reintroduces a date
+parameter to `assemble_features()`, right after Part B removed the old
+`month` one, for a genuinely different reason (exact diff vs. month bucket).
+
+Result: `@production` v8, CV 0.628 / test 0.631 — inside noise vs. v7
+(0.627/0.624), leaning slightly positive. Verified: new tests for the rest
+calc (normal/B2B/cap/clamp cases) + snapshot GAME_DATE passthrough, full
+suite (59/59), real batch prediction run, Docker rebuild + live smoke test.
+
+Also did a documentation pass this session: `TRAINING.md`/`COMPONENTS.md`/
+`log.md` had accumulated a lot of dated-narrative bloat from each
+experiment's writeup — condensed all three to state current facts plainly,
+moved the "why/how" detail into this file where it already belonged.
+
+---
+
+## Chronological train/test split (2026-08-28)
+
+**Status: done, verified, committed directly (user asked to "train on
+ordinal data not random... early season as training and the end of the
+season for test and validation").**
+
+### Two decisions clarified before implementing (AskUserQuestion)
+This request had two real forks, both worth surfacing rather than guessing:
+1. **Split axis** — per-season (each season's own early/late split,
+   combined) vs. global (sort all 7 seasons together, earliest ~80%
+   overall = train, most recent ~20% overall = test — which would've
+   concentrated the test set almost entirely in 2025-26). User picked
+   **per-season**, matching their literal phrasing and keeping every era
+   represented in both splits.
+2. **Whether model selection goes chronological too** — replace the 5-fold
+   CV used for hyperparameter search with a chronological train/val/test
+   three-way split, or leave CV as-is and only change the final holdout.
+   User picked **leave CV as-is** — smaller, more isolated change, consistent
+   with how every other change this session has been kept to one variable
+   at a time.
+
+### What got built
+`chronological_train_test_split(df, season_col="SeasonKey", date_col="DATE",
+test_size=0.2)` in `decision_tree_training.py`: groups by season, sorts each
+group by `DATE`, takes the first `1 - test_size` fraction as train and the
+rest as test, concatenates across seasons. Replaces
+`train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)` in
+`main()` — `X`/`y` (full dataset) kept around for the baseline
+calculations, which are unaffected by the split method.
+
+One implementation detail worth flagging: used `split_idx = round(len(season_df)
+* (1 - test_size))` with `.iloc[:split_idx]` / `.iloc[split_idx:]`, not
+`.iloc[-n_test:]` — the latter has a real footgun where `n_test == 0` would
+silently slice the *entire* group (`iloc[-0:]` == `iloc[0:]` in Python,
+since `-0 == 0`). Doesn't trigger at this project's season sizes
+(~1100-1300 games), but avoided anyway rather than leaving a latent bug.
+
+### Result
+New `@production` v7 (Logistic Regression): CV 0.6272, test 0.6243 — within
+noise of the previous random-split run (CV 0.6282, test 0.6255, right after
+the FTR fix). This matches what the earlier one-off chronological-split
+diagnostic (see the Part B entry above) found on the old month-averaged
+model: the random split was never flattering the score. Kept as the new
+permanent default anyway, since it's a more realistic simulation of actual
+usage (predict games not yet seen) at no measured cost.
+
+### Verification
+- New test `test_chronological_train_test_split_orders_within_each_season`
+  in `tests/test_training_pipeline.py`: synthetic 2-season fixture, asserts
+  the 80/20 split lands correctly, both seasons contribute to both splits,
+  and every train-row date precedes every test-row date within a season.
+- Full suite before touching real data (54 passed, split logic untested by
+  the rest of the suite so this was a pure sanity check), then again after
+  adding the new test (55 passed), then again after the real retrain (55
+  passed).
+- Real retrain run against live data end-to-end; printed date ranges for
+  both splits sanity-checked (train: 2019-10-28 → 2026-03-23, test:
+  2020-03-05 → 2026-06-13 — each season's tail bleeding into the next
+  season's front in the printed *range* is expected, since it's a per-season
+  split combined across 7 seasons' worth of test tails, not one contiguous
+  window).
+
+### Open / not done
+- Nothing left open from this change specifically.
+- Still open, from earlier sessions: the `ROLLING_WINDOW` size sweep
+  (5/10/15), and the remaining Lever 1/2/4 items in `TRAINING.md` (rest
+  days, injuries, opponent-adjustment, differences-instead-of-pairs,
+  league-relative stats, probability calibration).
+
+---
+
 ## FTR fix: true free-throw rate instead of the FT_PCT proxy (2026-08-28)
 
 **Status: done, verified, committed directly (user asked to "do the FTR

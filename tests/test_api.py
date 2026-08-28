@@ -49,6 +49,7 @@ def make_stats_df(include_all_stats: bool = True) -> pd.DataFrame:
     row = {
         "TEAM_NAME": ["denver nuggets", "miami heat"],
         "Season": ["2024-25", "2024-25"],
+        "GAME_DATE": ["2025-03-28", "2025-03-29"],
         "W_PCT": [0.7, 0.4],
         "PIE": [0.55, 0.45],
         "EFG_PCT": [0.54, 0.51],

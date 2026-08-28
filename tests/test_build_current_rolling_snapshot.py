@@ -37,6 +37,10 @@ def test_build_snapshot_picks_last_valid_row_for_normal_case(tmp_path, monkeypat
     row = result[result["TEAM_NAME"] == "denver nuggets"].iloc[0]
     assert row["PIE"] == 0.60
     assert row["Season"] == "2024-25"
+    # GAME_DATE of the snapshotted row itself must be carried through -- it's
+    # not a rolling stat, it's what serving/inference/predictor.py needs to
+    # compute RestDays/B2B dynamically at prediction time.
+    assert row["GAME_DATE"] == "2024-11-03"
 
 
 def test_build_snapshot_carries_over_from_previous_season_when_no_valid_rows(tmp_path, monkeypatch):

@@ -93,7 +93,7 @@ def predict(req: PredictRequest) -> PredictResponse:
     resolved_map, selected_cols = resolve_stat_columns(stats_df.columns)
     resolved_cols = [c for c in selected_cols if c not in ("TEAM_NAME", "Season", "Month")]
 
-    features = assemble_features(stats_df, resolved_map, resolved_cols, home, away)
+    features = assemble_features(stats_df, resolved_map, resolved_cols, home, away, target)
     if features is None:
         raise HTTPException(
             status_code=404,

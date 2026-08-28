@@ -11,7 +11,7 @@ from sklearn.base import clone
 from sklearn.ensemble import BaggingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
@@ -169,6 +169,27 @@ def build_historical_training_dataset() -> pd.DataFrame:
     return dataset
 
 
+def chronological_train_test_split(
+    df: pd.DataFrame, season_col: str = "SeasonKey", date_col: str = "DATE", test_size: float = 0.2
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split each season's games by date instead of randomly: a season's earlier
+    games go to train, its later games (including playoffs) go to test.
+
+    Splitting per season -- rather than across the full multi-season date range
+    -- keeps train and test balanced across eras (every season contributes to
+    both), and matches how the model is actually used in-season: given a team's
+    form through some point in the season, predict its remaining games.
+    """
+    train_parts: list[pd.DataFrame] = []
+    test_parts: list[pd.DataFrame] = []
+    for _, season_df in df.groupby(season_col, sort=False):
+        season_df = season_df.sort_values(date_col)
+        split_idx = round(len(season_df) * (1 - test_size))
+        train_parts.append(season_df.iloc[:split_idx])
+        test_parts.append(season_df.iloc[split_idx:])
+    return pd.concat(train_parts), pd.concat(test_parts)
+
+
 def build_model_grids() -> dict[str, tuple]:
     """Each model paired with a small hyperparameter grid for GridSearchCV.
 
@@ -236,8 +257,14 @@ def main() -> None:
     X = df[selected_features]
     y = df[target]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    train_df, test_df = chronological_train_test_split(df, test_size=0.2)
+    X_train, y_train = train_df[selected_features], train_df[target]
+    X_test, y_test = test_df[selected_features], test_df[target]
+    print(
+        f"Chronological split: train={len(X_train)} rows "
+        f"({train_df['DATE'].min().date()} -> {train_df['DATE'].max().date()}), "
+        f"test={len(X_test)} rows "
+        f"({test_df['DATE'].min().date()} -> {test_df['DATE'].max().date()})"
     )
 
     scaler = StandardScaler()

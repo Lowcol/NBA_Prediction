@@ -4,6 +4,7 @@ import pandas as pd
 
 import decision_tree_training
 from decision_tree_training import (
+    chronological_train_test_split,
     collect_matchup_files,
     collect_monthly_files,
     collect_rolling_files,
@@ -62,6 +63,35 @@ def test_monthly_files_have_correct_internal_season_label():
         assert actual_labels == {expected_label}, (
             f"{path} claims Season {actual_labels}, expected {{{expected_label!r}}}"
         )
+
+
+def test_chronological_train_test_split_orders_within_each_season():
+    # Two seasons, 10 games each, dates strictly increasing within a season.
+    # A row's "value" is its position in the season so leakage is obvious.
+    df = pd.DataFrame({
+        "SeasonKey": ["2019_20"] * 10 + ["2020_21"] * 10,
+        "DATE": pd.to_datetime(
+            [f"2019-10-{d:02d}" for d in range(1, 11)]
+            + [f"2020-10-{d:02d}" for d in range(1, 11)]
+        ),
+        "value": list(range(10)) + list(range(10)),
+    })
+
+    train_df, test_df = chronological_train_test_split(df, test_size=0.2)
+
+    # 80/20 per season -> 8 train + 2 test per season = 16 train, 4 test total.
+    assert len(train_df) == 16
+    assert len(test_df) == 4
+
+    # Both seasons must contribute to both splits (not just the newest one).
+    assert set(train_df["SeasonKey"].unique()) == {"2019_20", "2020_21"}
+    assert set(test_df["SeasonKey"].unique()) == {"2019_20", "2020_21"}
+
+    # Within each season, every train row's date is earlier than every test row's.
+    for season_key in ("2019_20", "2020_21"):
+        train_dates = train_df.loc[train_df["SeasonKey"] == season_key, "DATE"]
+        test_dates = test_df.loc[test_df["SeasonKey"] == season_key, "DATE"]
+        assert train_dates.max() < test_dates.min()
 
 
 def test_training_dataset_includes_all_seasons_with_no_missing_features(tmp_path, monkeypatch):

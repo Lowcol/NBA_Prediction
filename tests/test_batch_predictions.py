@@ -122,11 +122,11 @@ def test_load_predictor_falls_back_to_local_pkls_when_registry_unavailable(monke
 
 
 def test_build_feature_row_prefixes_home_and_away_correctly():
-    home_row = pd.Series({"W_PCT_base": 0.7, "PIE": 0.55})
-    away_row = pd.Series({"W_PCT_base": 0.4, "PIE": 0.45})
+    home_row = pd.Series({"W_PCT_base": 0.7, "PIE": 0.55, "GAME_DATE": "2025-03-28"})
+    away_row = pd.Series({"W_PCT_base": 0.4, "PIE": 0.45, "GAME_DATE": "2025-03-29"})
     resolved_map = {"W_PCT": "W_PCT_base", "PIE": "PIE"}
 
-    features = build_feature_row(home_row, away_row, resolved_map)
+    features = build_feature_row(home_row, away_row, resolved_map, date(2025, 4, 1))
 
     assert features == {
         "Team1Home": 1,
@@ -134,4 +134,32 @@ def test_build_feature_row_prefixes_home_and_away_correctly():
         "Team2_W_PCT": 0.4,
         "Team1_PIE": 0.55,
         "Team2_PIE": 0.45,
+        "Team1_RestDays": 3.0,
+        "Team1_B2B": 0.0,
+        "Team2_RestDays": 2.0,
+        "Team2_B2B": 0.0,
     }
+
+
+def test_rest_days_and_b2b_back_to_back():
+    # Last game the day before the target -> 0 days rest, a back-to-back.
+    assert predictor.rest_days_and_b2b("2025-04-01", date(2025, 4, 2)) == (0.0, 1.0)
+
+
+def test_rest_days_and_b2b_normal_gap():
+    # 4 calendar days between games -> 3 full rest days, not a back-to-back.
+    assert predictor.rest_days_and_b2b("2025-03-28", date(2025, 4, 1)) == (3.0, 0.0)
+
+
+def test_rest_days_and_b2b_caps_long_gaps():
+    # A season-opener-sized gap (months) must clip to REST_DAYS_CAP, not be
+    # treated as literally that many days of extra rest.
+    rest_days, b2b = predictor.rest_days_and_b2b("2025-06-01", date(2025, 10, 21))
+    assert rest_days == predictor.REST_DAYS_CAP
+    assert b2b == 0.0
+
+
+def test_rest_days_and_b2b_clamps_same_day_to_zero_not_negative():
+    # A stale snapshot whose last known game is on (or after) the target date
+    # must not produce a negative rest value.
+    assert predictor.rest_days_and_b2b("2025-04-01", date(2025, 4, 1)) == (0.0, 1.0)

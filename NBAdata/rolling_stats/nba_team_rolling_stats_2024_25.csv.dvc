@@ -1,5 +1,5 @@
 outs:
-- md5: 24ab1920299d00758cc2b36184f2d252
-  size: 425286
+- md5: 49931975fef9180c9cf931f80b23b3dd
+  size: 446419
   hash: md5
   path: nba_team_rolling_stats_2024_25.csv

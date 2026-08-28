@@ -21,9 +21,18 @@ season's rolling-stats file. See documentation/TRAINING.md for more on this
 asymmetry.
 
 Output: NBAdata/rolling_stats/nba_team_current_rolling_stats_<season>.csv --
-one row per team, with TEAM_NAME, the stat columns, and Season (recording
-which season's data the row actually came from: the target season, or a
-carried-over prior one, for debuggability).
+one row per team, with TEAM_NAME, the stat columns, GAME_DATE (the date of
+that snapshotted row's own game), and Season (recording which season's data
+the row actually came from: the target season, or a carried-over prior one,
+for debuggability).
+
+Note: RestDays/B2B are deliberately NOT snapshotted here, unlike the other
+10 stats. They're a fact about the gap before a specific upcoming game, not
+a team property that holds steady until the next refresh -- so serving
+computes them dynamically at prediction time from this row's GAME_DATE and
+the actual game being predicted (see serving/inference/predictor.py). This
+is exactly why GAME_DATE is carried through instead of being dropped like
+GAME_ID/games_in_window are.
 """
 
 from pathlib import Path
@@ -100,9 +109,14 @@ def build_snapshot(target_season_key: str) -> pd.DataFrame:
             row = prev_latest.loc[team]
         else:
             continue
-        rows.append({"TEAM_NAME": team, **{col: row[col] for col in STAT_COLS}, "Season": row["Season"]})
+        rows.append({
+            "TEAM_NAME": team,
+            **{col: row[col] for col in STAT_COLS},
+            "GAME_DATE": row["GAME_DATE"],
+            "Season": row["Season"],
+        })
 
-    return pd.DataFrame(rows, columns=["TEAM_NAME"] + STAT_COLS + ["Season"])
+    return pd.DataFrame(rows, columns=["TEAM_NAME"] + STAT_COLS + ["GAME_DATE", "Season"])
 
 
 def build_and_save(season_key: str) -> Path:

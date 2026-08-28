@@ -18,7 +18,9 @@ from sklearn.pipeline import Pipeline
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "modeling"))
+sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "data_prep"))
 
+from build_rolling_team_stats import REST_DAYS_CAP  # noqa: E402
 from features import SELECTED_FEATURES  # noqa: E402
 from mlflow_config import PRODUCTION_MODEL_URI, tracking_uri  # noqa: E402
 
@@ -90,11 +92,28 @@ def load_predictor():
         return Pipeline([("scaler", scaler), ("model", model)])
 
 
-def build_feature_row(home_row: pd.Series, away_row: pd.Series, resolved_map: dict[str, str]) -> dict:
+def rest_days_and_b2b(last_game_date, target: date) -> tuple[float, float]:
+    """Days of rest before `target`, given a team's snapshotted last known game
+    date. Same cap/semantics as build_rolling_team_stats.py's training-time
+    RestDays/B2B, just evaluated against the actual game being predicted
+    instead of a historical row's own next game -- RestDays isn't a team
+    property that can be snapshotted like the other stats, since it depends on
+    which game is being predicted (see build_current_rolling_snapshot.py).
+    """
+    last_date = pd.to_datetime(last_game_date).date()
+    rest_days = max(0, min((target - last_date).days - 1, REST_DAYS_CAP))
+    return float(rest_days), float(rest_days == 0)
+
+
+def build_feature_row(
+    home_row: pd.Series, away_row: pd.Series, resolved_map: dict[str, str], target: date
+) -> dict:
     row = {"Team1Home": 1}
     for model_col, source_col in resolved_map.items():
         row[f"Team1_{model_col}"] = home_row[source_col]
         row[f"Team2_{model_col}"] = away_row[source_col]
+    row["Team1_RestDays"], row["Team1_B2B"] = rest_days_and_b2b(home_row["GAME_DATE"], target)
+    row["Team2_RestDays"], row["Team2_B2B"] = rest_days_and_b2b(away_row["GAME_DATE"], target)
     return row
 
 
@@ -104,6 +123,7 @@ def assemble_features(
     resolved_cols: list[str],
     home: str,
     away: str,
+    target: date,
 ) -> dict | None:
     """Look up both teams' latest stats and build one feature row.
 
@@ -114,7 +134,7 @@ def assemble_features(
     away_row = latest_team_stat_row(stats_df, away, resolved_cols)
     if home_row is None or away_row is None:
         return None
-    return build_feature_row(home_row, away_row, resolved_map)
+    return build_feature_row(home_row, away_row, resolved_map, target)
 
 
 def predict_from_features(predictor, features: dict) -> tuple[int, float | None]:

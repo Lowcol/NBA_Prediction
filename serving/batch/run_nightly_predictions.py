@@ -96,7 +96,7 @@ def main() -> None:
     for _, game in day_games.iterrows():
         home, away = game["Team1"], game["Team2"]
 
-        features = assemble_features(stats_df, resolved_map, resolved_cols, home, away)
+        features = assemble_features(stats_df, resolved_map, resolved_cols, home, away, target)
         if features is None:
             print(f"Skipping {home} vs {away}: no usable stats on file for one or both teams.")
             continue
